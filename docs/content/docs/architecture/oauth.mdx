@@ -5,6 +5,15 @@ description: OAuth 2.0 四种授权方式详解：授权码、隐藏式、密码
 
 ## 概述
 
+## 速查卡
+
+- **四种授权方式**：授权码+PKCE（最安全，所有现代应用推荐）→ 凭证式（M2M/CLI）→ 隐藏式（已废弃）→ 密码式（已废弃）
+- **核心角色**：资源所有者（用户）→ 客户端（第三方应用）→ 授权服务器（颁发令牌）→ 资源服务器（提供 API）
+- **PKCE**：code_verifier + code_challenge（SHA256），防授权码拦截攻击，OAuth 2.1 强制要求
+- **SPA 最佳实践**：授权码 + PKCE + BFF（后端安全存储令牌，避免令牌暴露在浏览器）
+- **令牌更新**：refresh_token 换新 access_token，比重复登录体验好
+- **Bearer Token**：谁持有令牌谁就能访问，必须 HTTPS 传输
+
 OAuth 2.0 的标准是 **RFC 6749**。其核心是向第三方应用颁发令牌。
 
 > OAuth 引入了一个授权层，用来分离两种不同的角色：客户端和资源所有者。资源所有者同意以后，资源服务器可以向客户端颁发令牌。客户端通过令牌，去请求数据。
@@ -191,3 +200,16 @@ https://b.com/oauth/token?
 | 隐藏式 | — | 较低 | ❌ 已废弃 |
 | 密码式 | — | 低 | ❌ 已废弃 |
 | 凭证式 | 服务间通信（M2M）、命令行 | 中 | ✅ 保留 |
+
+---
+
+## 自测
+
+1. **授权码模式为什么比隐藏式安全？PKCE 解决了什么问题？**
+   <br/>→ 授权码分两步：先拿授权码（前端），再用授权码+client_secret 换令牌（后端），令牌不经过浏览器。PKCE 防止授权码被拦截后直接换令牌——即使拦截者拿到 code，没有 code_verifier 也无法换取 access_token。
+
+2. **SPA（单页应用）如何安全地使用 OAuth？为什么不推荐 Implicit？**
+   <br/>→ SPA 使用授权码 + PKCE + BFF 模式：SPA 发起授权请求（含 code_challenge），BFF 后端换令牌并安全存储（httpOnly cookie），SPA 不直接接触 access_token。Implicit 令牌直接暴露在 URL fragment 中，安全风险极高，OAuth 2.1 已废弃。
+
+3. **access_token 过期后为什么要用 refresh_token 而不是重新登录？refresh_token 被盗怎么办？**
+   <br/>→ 减少用户重新登录次数。refresh_token 通常为一次性使用（rotation），使用后颁发新 refresh_token 并废弃旧的。若旧的 refresh_token 被再次使用，说明已泄露，立即吊销所有令牌。

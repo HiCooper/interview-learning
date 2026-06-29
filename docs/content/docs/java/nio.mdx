@@ -7,6 +7,26 @@ description: BIO vs NIO 对比，I/O 模型与零拷贝技术
 
 NIO 是一种**同步非阻塞**的 I/O 模型，也是 I/O 多路复用的基础，主要解决高并发与大量连接 I/O 处理问题。
 
+## 速查卡
+
+- **BIO vs NIO vs AIO**：BIO 同步阻塞（一线程一连接）→ NIO 同步非阻塞（Selector 单线程轮询多连接）→ AIO 异步非阻塞（OS 回调）
+- **I/O 两阶段**：等待就绪（"空等"，不用 CPU）+ 真正读写（极快，memory copy）
+- **NIO 核心优势**：单线程轮询事件替代多线程阻塞，解决 C10K 问题
+- **Netty 零拷贝**：用户态优化（CompositeByteBuf 逻辑组合、wrap 包装、slice 切片共享内存、FileRegion → transferTo → sendfile）
+
+---
+
+## 自测
+
+1. **NIO 是「同步」非阻塞，为什么还叫同步？**
+   <br/>→ 同步/异步的分界在「谁来完成数据从内核到用户空间的拷贝」。NIO 的 `read()` 需要用户线程主动调用并完成 copy，尽管不阻塞。AIO 则是 OS 完成 copy 后回调通知。
+
+2. **Netty 的零拷贝和 OS 层面的零拷贝（sendfile）有什么不同？**
+   <br/>→ OS 零拷贝：内核态 DMA 直接传输，避免用户态↔内核态拷贝。Netty 零拷贝：用户态优化（CompositeBuf 逻辑组合、slice 共享内存、FileRegion 包装 transferTo），减少数据复制和内存分配。
+
+3. **为什么 NIO 能支持海量连接？Selector 的底层实现是什么？**
+   <br/>→ Selector 基于 OS 多路复用（Linux epoll、Mac kqueue），一个线程可监听数千个 Channel 的事件。只有就绪的 Channel 才被处理，避免了为每个连接创建线程的开销。
+
 ## I/O 模型对比
 
 所有系统 I/O 都分为两个阶段：**等待就绪**和**真正的读写操作**。

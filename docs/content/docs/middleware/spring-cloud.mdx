@@ -16,6 +16,14 @@ description: Spring Cloud 全家桶核心组件、Eureka vs Nacos、配置中心
 
 > **Spring Boot 3 / Spring Cloud 2022.0+ 要求 Java 17+**，大量旧组件（Eureka、Ribbon、Zuul、Hystrix、Sleuth）已被替代或移除。
 
+
+## 速查卡
+
+- **组件替换**：Nacos（注册+配置，替代 Eureka+Config）→ Gateway（替代 Zuul）→ LoadBalancer（替代 Ribbon）→ Sentinel（替代 Hystrix）→ Micrometer Tracing（替代 Sleuth）
+- **Eureka vs Nacos**：Eureka AP 模型、轮询、仅注册；Nacos 支持 AP/CP 切换、长连接推送、注册+配置一体
+- **可靠调用**：OpenFeign + LoadBalancer（服务名调用）→ 超时重试+幂等 → Sentinel（流控/熔断/降级）
+- **配置中心**：Nacos/Apollo 长连接实时推送、命名空间隔离、灰度策略（按实例/IP/标签）、本地兜底文件、敏感配置加密
+- **Spring Boot 3 / Spring Cloud 2022.0+ 要求 Java 17+**
 ## 解决的问题
 
 单体架构扩展性差 → 微服务化后分布式复杂性（服务发现、容错、统一入口、配置管理）→ Spring Cloud 提供标准化基础设施。
@@ -52,3 +60,16 @@ description: Spring Cloud 全家桶核心组件、Eureka vs Nacos、配置中心
 **Nacos/Apollo 优势**：长轮询/长连接实时推送、命名空间隔离、丰富灰度策略（按实例/IP/标签）、可视化管理
 
 **架构要点**：集群高可用、本地兜底文件、敏感配置加密。
+
+---
+
+## 自测
+
+1. **Nacos 相比 Eureka 的核心优势是什么？为什么 CAP 可切换很重要？**
+   <br/>→ 功能上：Nacos 注册+配置一体，Eureka 仅注册。性能上：Nacos 长连接推送（gRPC），Eureka 轮询延迟高。CAP 可切换：大多数场景用 AP（高可用），对一致性要求高的场景（如服务权重变更）可切 CP，灵活适配不同场景。
+
+2. **微服务调用链路 A→B→C，B 超时了怎么处理？熔断和降级如何配合？**
+   <br/>→ 设置合理超时时间 + 重试（保证幂等）→ 如果 B 持续失败达到阈值，Sentinel 熔断（快速失败，不调用 B，防止级联故障）→ 执行降级逻辑（返回兜底数据或默认结果）。熔断半开试探恢复后自动关闭。
+
+3. **配置中心推送变更后，如何保证所有实例生效？灰度发布怎么做？**
+   <br/>→ Nacos/Apollo 长连接实时推送（秒级生效），客户端收到变更后刷新 Bean。灰度：按实例 IP/标签/比例逐步推送，先灰度 1-2 台观察业务指标，无异常再全量发布。本地兜底文件保证配置中心不可用时服务仍可启动。

@@ -3,6 +3,18 @@ title: Java 并发编程
 description: 线程池、AQS、synchronized 与 ReentrantLock 对比分析
 ---
 
+## 速查卡
+
+- **线程池**：corePoolSize → 队列 → maxPoolSize → 拒绝策略。CPU 密集型设 N，IO 密集型设 2N
+- **AQS**：CLH 虚拟双向队列 + volatile state + CAS，模版方法模式，子类重写 tryAcquire/tryRelease
+- **synchronized 锁升级**：无锁 → 偏向锁（避免 CAS）→ 轻量级锁（CAS+自旋）→ 重量级锁（阻塞）。JDK21 移除偏向锁
+- **synchronized vs ReentrantLock**：前者自动释放、JVM 内置；后者灵活（公平锁/超时/中断/多条件队列）、AQS 实现
+- **虚拟线程**（Java 21）：轻量级（~KB），阻塞时自动释放平台线程，无需池化
+- **CompletableFuture**：异步编排，thenApply/thenAccept/exceptionally
+- **StampedLock**：乐观读 + 悲观读/写，比 ReadWriteLock 更高效
+
+---
+
 ## 一、Java 线程池
 
 ### ThreadPoolExecutor 核心参数
@@ -196,3 +208,22 @@ if (!lock.validate(stamp)) {
     try { /* ... */ } finally { lock.unlockRead(stamp); }
 }
 ```
+
+---
+
+## 自测
+
+1. **线程池提交任务后，如果当前线程数 = corePoolSize、队列未满，任务会走哪条路径？**
+   <br/>→ 入队列等待，不会创建新线程。只有队列满了才会创建线程直到 maxPoolSize。
+
+2. **AQS 中 state 变量为什么用 volatile 修饰？CAS 操作 state 时，线程阻塞和唤醒依赖什么机制？**
+   <br/>→ volatile 保证多线程间的可见性。阻塞和唤醒依赖 `LockSupport.park()` / `unpark()`，底层基于 `Unsafe` 类。
+
+3. **synchronized 偏向锁在 JDK 21 中被移除的原因是什么？**
+   <br/>→ 现代应用大多是多线程高并发场景，偏向锁的撤销成本（Stop-The-World）反而高于收益，JEP 374/450 逐步废弃并移除。
+
+4. **ReentrantLock 相比 synchronized，哪个场景必须用 ReentrantLock？**
+   <br/>→ 需要公平锁、可中断获取锁（`lockInterruptibly()`）、超时获取锁（`tryLock(timeout)`）、多个条件队列（`newCondition()`）时。
+
+5. **虚拟线程适合什么场景？为什么不建议在虚拟线程中使用 synchronized 块或 `Thread.sleep()` 长时间阻塞？**
+   <br/>→ 适合 IO 密集型高并发场景。synchronized 会 pin 住底层平台线程（虚拟线程无法 unmount），`Thread.sleep()` 在虚拟线程中会被自动处理（非阻塞），真正需要避免的是长时间持有 monitor 锁。

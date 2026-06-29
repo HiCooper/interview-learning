@@ -3,6 +3,16 @@ title: Java 集合框架
 description: HashMap、ConcurrentHashMap、红黑树、TreeMap 等核心集合类原理与对比
 ---
 
+## 速查卡
+
+- **HashMap**：数组+链表+红黑树，负载因子 0.75，链表 ≥8 且总量 ≥64 时树化（O(n)→O(log n)），非线程安全
+- **ConcurrentHashMap**：CAS+synchronized，bin 级别锁，高并发场景首选
+- **红黑树**：5 个特性（根黑、叶黑、红子必黑、同黑高），O(log n)，HashMap/TreeMap 使用
+- **B+ 树 vs B 树**：B+ 树非叶子只存 key、数据全在叶子带链表，适合范围查询 → MySQL 索引
+- **HashTable**：全方法 synchronized，已淘汰；TreeMap 自然排序 O(log n)；LinkedHashMap 保序
+
+---
+
 ## 一、HashMap
 
 ### 数据结构
@@ -79,3 +89,22 @@ HashMap 非线程安全，允许 null key/value，迭代器 fail-fast。
 | 数据存储 | 每个节点 | 仅叶子节点 |
 | 查询 | 找到即返回 | 必须到叶子 |
 | 分支存储 | 数据关键字 | 索引信息 |
+
+---
+
+## 自测
+
+1. **HashMap 扩容时链表树化的两个条件是？为什么不能只看链表长度 ≥8？**
+   <br/>→ 链表长度 ≥8 且 Map 总元素数 ≥64。如果总量还很小，优先扩容而非树化，因为扩容可能缩短链表，树化有额外内存开销。
+
+2. **ConcurrentHashMap 在 JDK 7 和 JDK 8 中的实现有什么区别？**
+   <br/>→ JDK 7 使用分段锁（Segment，继承 ReentrantLock），默认 16 段。JDK 8 改为 CAS + synchronized，锁粒度细到 bin 级别，并发度更高。
+
+3. **红黑树 vs AVL 树：为什么 HashMap 选择红黑树而非 AVL？**
+   <br/>→ 红黑树插入/删除的旋转次数少于 AVL（最多 2 次 vs O(log n) 次），HashMap 是写密集型（put 频率高），红黑树更合适。AVL 适合读多写少场景。
+
+4. **为什么 MySQL InnoDB 使用 B+ 树而非 B 树或红黑树？**
+   <br/>→ B+ 树非叶子不存数据（索引层更瘦 → 更少磁盘 IO），叶子层有双向链表（范围查询高效），树高稳定。红黑树适用于内存，B 树适用于随机访问。
+
+5. **HashMap 为什么默认负载因子是 0.75？**
+   <br/>→ 0.75 是空间与时间的折中。1.0 减少扩容但冲突增加，0.5 减少冲突但浪费 50% 空间。泊松分布下 0.75 时链表长度 ≥8 概率 < 千万分之一。

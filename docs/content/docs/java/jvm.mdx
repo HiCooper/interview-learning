@@ -3,6 +3,16 @@ title: JVM
 description: JVM 类加载、内存布局、垃圾回收算法与常用 GC 收集器
 ---
 
+## 速查卡
+
+- **类加载**：加载→连接（验证/准备/解析）→初始化。双亲委派：自底向上委托，自顶向下加载
+- **内存布局**：线程独享（PC/虚拟机栈/本地方法栈）+ 线程共享（堆/Metaspace）。堆分代：新生代 Eden:S0:S1=8:1:1 + 老年代
+- **GC 算法**：标记-清除（碎片）、复制（新生代）、标记-整理（老年代）、分代收集（组合策略）
+- **GC 收集器**：JDK 8 默认 Parallel；JDK 9+ 默认 G1（标记-整理，无碎片）；ZGC（JDK 11+，亚毫秒停顿，TB 级堆）
+- **Metaspace**（JDK 8+）：替代永久代，使用本地内存，`-XX:MaxMetaspaceSize` 限制
+
+---
+
 ## 一、类加载
 
 ### 加载过程
@@ -120,3 +130,22 @@ JDK 8 移除了永久代（PermGen），引入**元空间（Metaspace）**：
 | `jstack <pid>` | 线程堆栈 |
 | `jmap -heap <pid>` | 堆内存映像 |
 | `jstat -gc <pid> <ms>` | GC 统计 |
+
+---
+
+## 自测
+
+1. **双亲委派模型的作用是什么？打破双亲委派的例子有哪些？**
+   <br/>→ 作用：防止核心类被篡改（安全）、避免重复加载（效率）。打破例子：Tomcat 的 WebAppClassLoader（隔离不同应用）、SPI（`Thread.currentThread().getContextClassLoader()`）、JDBC 驱动加载。
+
+2. **什么时候触发 Full GC？如何减少 Full GC 频率？**
+   <br/>→ 触发：晋升大小 > 老年代剩余空间、Metaspace 不足、`System.gc()` 显式调用。减少：调大 Survivor 区避免过早晋升、控制大对象直接进老年代、合理设置 Metaspace 大小。
+
+3. **G1 和 CMS 的核心区别是什么？为什么 G1 取代了 CMS？**
+   <br/>→ CMS 标记-清除（碎片→需要 Full GC 整理）、并发失败退化为 Serial Old。G1 标记-整理（无碎片）、可预测停顿时间（`-XX:MaxGCPauseMillis`）、将堆分为 Region 精细化回收。CMS 在 JDK 18 被彻底移除。
+
+4. **ZGC 的「亚毫秒停顿」是如何做到的？染色指针是什么？**
+   <br/>→ ZGC 几乎所有阶段并发执行。染色指针（Colored Pointers）：将 GC 状态信息编码到 64 位指针的位中（marked0/marked1/remapped/finalizable），无需额外对象头，加载指针时通过屏障实现并发转移。
+
+5. **你线上遇到 Full GC 频繁，怎么排查？**
+   <br/>→ `jstat -gc` 看 GC 频率和耗时 → `jmap -heap` 看内存分布 → `jmap -dump` 导出堆转储 → MAT/JProfiler 分析大对象/泄漏 → 结合 GC 日志（`-Xlog:gc*`）定位。

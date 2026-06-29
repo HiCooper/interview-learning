@@ -9,6 +9,13 @@ description: Java 进程 CPU 占用过高问题的排查方法与常用工具
 2. 查找 CPU 占用较高线程 PID
 3. 查看对应的线程堆栈
 
+## 速查卡
+
+- **排查三步**：jps -l（找PID）→ top -H -p（找高CPU线程）→ jstack（看堆栈，线程ID转16进制）
+- **GC排查**：jstat -gc <pid> <interval>，关注FGC次数是否持续增长
+- **常见原因**：计算密集/死循环 → 内存泄漏导致频繁GC → 锁竞争导致自旋
+- **关键命令**：jps（进程列表）→ jstack（线程堆栈）→ jmap -heap（内存映像）→ jstat -gc（GC统计）
+
 ## 排查步骤
 
 ### 1. 查找进程 PID
@@ -55,3 +62,13 @@ jstat -gc <pid> 1000
 | `jmap -heap <pid>` | 查看堆内存映像 |
 | `jstat -gc <pid> <interval>` | 查看 GC 统计 |
 | `top -H -p <pid>` | 查看进程内线程 CPU 占用 |
+
+---
+
+## 自测
+
+1. **`top -H -p <pid>` 显示的线程 ID 为什么需要在 jstack 中转 16 进制？**
+   <br/>→ top 显示的是十进制线程 ID（TID），而 jstack 输出的线程信息中 `nid` 字段是 16 进制。`printf '%x\n' <tid>` 转换后，`jstack <pid> | grep -A 10 0x<hex>` 定位到具体线程的堆栈。
+
+2. **CPU 高但 GC 也频繁，先排查哪个？如何区分是业务逻辑还是 GC 导致的 CPU 高？**
+   <br/>→ 先用 `jstat -gc` 看 GC 频率和耗时。如果 GC 线程（如 "GC task thread"）CPU 高 → 内存问题（堆太小/内存泄漏）。如果业务线程 CPU 高 → 代码问题（死循环/大量计算）。两者可能关联：内存不够 → 频繁 GC → CPU 高。

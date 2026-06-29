@@ -7,6 +7,14 @@ description: Git Submodule 子模块管理命令与最佳实践
 
 `git submodule` 是 Git 中用于管理一个仓库作为另一个仓库子模块的命令。允许将外部仓库嵌入到当前仓库的指定目录中，保持两个仓库的独立提交历史。
 
+
+## 速查卡
+
+- **核心思想**：父仓库只记录子模块的提交哈希（快照），不跟踪分支或文件内容
+- **关键文件**：`.gitmodules`（URL+路径，需提交）；子模块默认 detached HEAD
+- **常用命令**：`clone --recursive`（克隆+子模块）→ `submodule update --remote`（批量更新）→ `pull --recurse-submodules`（同步父仓库引用）→ `foreach cmd`（遍历所有子模块）
+- **删除子模块**：deinit → rm → 删除 .git/modules/
+- **替代方案**：Git subtree（合并为普通目录）、包管理器（npm/Maven/Go modules）
 ## 核心概念
 
 > **核心思想**：父仓库只记录子模块的**提交哈希**（即"快照"），不跟踪子模块分支或文件内容。
@@ -92,3 +100,13 @@ git submodule foreach 'git checkout main && git pull'
 
 - **Git subtree**：将外部仓库合并成普通文件夹
 - **包管理器**：如 npm、Maven、Go modules
+
+---
+
+## 自测
+
+1. **为什么克隆父仓库后子模块目录是空的？如何正确初始化？**
+   <br/>→ 子模块只记录了提交哈希引用，不存储实际文件。用 `git clone --recursive` 一步到位，或 `git submodule init && git submodule update` 分步初始化。
+
+2. **子模块默认处于 detached HEAD 状态是什么原因？如何让子模块跟踪分支？**
+   <br/>→ 默认 `submodule update` 签出特定提交（父仓库记录的哈希），处于 detached HEAD。在 `.gitmodules` 中设置 `branch = main`，然后用 `git submodule update --remote` 即可跟踪远程分支。

@@ -21,6 +21,13 @@ description: 双指针经典题 — 左右指针向中间收缩，O(n) 时间 O(
 - `1 <= n <= 2 × 10⁴`
 - `0 <= height[i] <= 10⁵`
 
+## 速查卡
+
+- **核心思路**：每个位置能接的水 = min(leftMax, rightMax) - height[i]
+- **双指针维护**：leftMax 和 rightMax，谁小移动谁（min(leftMax, rightMax) 已确定）
+- **时间复杂度**：O(n)，空间 O(1)
+- **关联理论**：双指针 = 在有序性质上的空间压缩（左/右最大高度单调）
+
 ## 解法：双指针
 
 ### 思路
@@ -101,3 +108,13 @@ class Solution {
 - **移动策略**: 总是移动较矮一侧的指针，因为能接的水量由矮侧决定
 - **左右对称**: 两侧逻辑完全对称，`leftMax` 和 `rightMax` 分别扮演左右边界角色
 - **前缀/后缀最大值**: 另一种思路是用 `leftMax[i]` 和 `rightMax[i]` 前缀数组，但需要 O(n) 空间
+
+---
+
+## 自测
+
+1. **接雨水双指针的核心思想是什么？为什么谁小移动谁？**
+   <br/>→ 每个位置能接的水 = min(leftMax, rightMax) - height[i]。当 leftMax < rightMax 时，min(leftMax, rightMax) = leftMax 已被确定，无论 rightMax 后面多大都不影响当前位置。所以处理 left 侧并左移。反之同理。
+
+2. **如果不用双指针，还有什么解法？各自的复杂度如何？**
+   <br/>→ 暴力 O(n²)（每个位置向左右找最大）；前缀最大值数组 O(n) 时间 O(n) 空间（预处理 leftMax[] 和 rightMax[]）；单调栈 O(n) 时间 O(n) 空间（按行而非按列计算）。双指针是空间最优解 O(1)。
