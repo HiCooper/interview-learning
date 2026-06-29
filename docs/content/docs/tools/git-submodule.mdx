@@ -1,0 +1,94 @@
+---
+title: Git Submodule
+description: Git Submodule 子模块管理命令与最佳实践
+---
+
+## 概述
+
+`git submodule` 是 Git 中用于管理一个仓库作为另一个仓库子模块的命令。允许将外部仓库嵌入到当前仓库的指定目录中，保持两个仓库的独立提交历史。
+
+## 核心概念
+
+> **核心思想**：父仓库只记录子模块的**提交哈希**（即"快照"），不跟踪子模块分支或文件内容。
+
+- **`.gitmodules`**：保存子模块的 URL 和路径，应提交到父仓库
+- **Detached HEAD**：默认 `git submodule update` 让子模块处于 detached HEAD 状态。若想开发，需手动切换到分支
+
+## 常用命令
+
+### 1. 添加子模块
+
+```bash
+git submodule add <repository_url> [<path>]
+# 示例
+git submodule add https://github.com/example/lib.git libs/example-lib
+```
+
+### 2. 克隆包含子模块的仓库
+
+```bash
+# 一步到位
+git clone --recursive <parent_repo_url>
+
+# 分步执行
+git clone <parent_repo_url>
+cd <parent_repo>
+git submodule init
+git submodule update
+```
+
+### 3. 更新子模块
+
+```bash
+# 进入子模块目录拉取
+cd <submodule_path> && git checkout main && git pull
+
+# 在父仓库中批量更新所有子模块到远程最新
+git submodule update --remote
+```
+
+若希望子模块跟踪某个分支，在 `.gitmodules` 中设置 `branch = main`。
+
+### 4. 查看子模块状态
+
+```bash
+git submodule status
+```
+
+commit-hash 前的符号：无符号=已签出，`+`=有未提交变更，`-`=未初始化。
+
+### 5. 同步子模块
+
+```bash
+git pull --recurse-submodules
+# 或手动
+git submodule update --init --recursive
+```
+
+### 6. 删除子模块
+
+```bash
+git submodule deinit -f <submodule_path>
+git rm -f <submodule_path>
+rm -rf .git/modules/<submodule_path>
+```
+
+### 7. 遍历子模块
+
+```bash
+git submodule foreach 'git checkout main && git pull'
+```
+
+## 常见场景速查
+
+| 场景 | 推荐命令 |
+|------|----------|
+| 初次克隆 | `git clone --recursive` |
+| 父仓库更新了子模块引用 | `git pull --recurse-submodules` |
+| 批量拉取最新代码 | `git submodule update --remote` |
+| 子模块跟随特定分支 | 设置 `.gitmodules` 中的 `branch`，使用 `--remote` |
+
+## 替代工具
+
+- **Git subtree**：将外部仓库合并成普通文件夹
+- **包管理器**：如 npm、Maven、Go modules

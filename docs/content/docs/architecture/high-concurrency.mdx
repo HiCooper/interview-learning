@@ -1,0 +1,130 @@
+---
+title: 高并发系统设计
+description: 短链系统、分布式 ID 生成、计数系统、限流策略等设计方案
+---
+
+## 一、短链系统设计
+
+### 核心流程
+
+```
+提交长URL → 生成短码 → 存储映射 → 返回短链
+访问短链 → 查询映射 → 301/302 重定向
+```
+
+### 短码生成
+
+**发号器方案**（推荐）：
+
+```java
+long id = idGenerator.nextId();       // 如 12345678
+String code = Base62.encode(id);      // → "dnh8f"
+// Base62: 0-9a-zA-Z，7位 ≈ 3.5万亿链接
+```
+
+**预生成码池**：提前生成短码入队列，高并发直接取用。
+
+### 架构
+
+```
+用户 → Nginx LB → 短链服务集群
+                    ├── Redis (热点缓存)
+                    └── MySQL (分库分表)
+```
+
+**关键**：Redis 缓存热点、布隆过滤器拦截不存在短码、301（永久）vs 302（统计）。
+
+---
+
+## 二、分布式 ID 生成
+
+| 方案 | 原理 | 优点 | 缺点 |
+|------|------|------|------|
+| **Snowflake** | 时间戳+机器ID+序列号 | 有序递增，高性能 | 依赖时钟同步 |
+| **号段模式** | DB 批量分配 ID 段 | 强一致，不依赖时钟 | 依赖 DB |
+| UUID v7 | 时间排序 UUID | 本地生成 | 较长 |
+
+### Snowflake 结构
+
+```
+1bit(未用) | 41bit(时间戳ms) | 10bit(机器ID) | 12bit(序列号)
+每毫秒 4096 个，理论 400万 QPS
+```
+
+### 时钟回拨处理
+
+- 等待时钟追上（短时间回拨）
+- **美团 Leaf**：号段模式不依赖时钟 + Snowflake 模式用 ZK 持久化时间戳
+
+---
+
+## 三、计数系统
+
+### Redis 计数
+
+```bash
+# Redis 基础计数
+INCR post:123:views
+SADD post:123:likers user_456
+```
+
+### 高并发优化
+
+**异步合并写**：本地累加 → 满100或超时 → `INCRBY` 批量写 Redis。
+
+**HyperLogLog**：UV 估算。12KB 统计 2^64 元素，误差 < 0.81%。
+
+```bash
+PFADD page:uv user_1 user_2
+PFCOUNT page:uv
+```
+
+### 排行榜（Sorted Set）
+
+```bash
+ZADD rank 100 user_1
+ZREVRANGE rank 0 9
+ZRANK rank user_1
+```
+
+---
+
+## 四、限流策略
+
+| 算法 | 特点 |
+|------|------|
+| 固定窗口 | 100/min，边界突发可能翻倍 |
+| 滑动窗口 | 更平滑 |
+| 漏桶 | 恒定速率 |
+| **令牌桶** | 允许突发，最常用 |
+
+### 令牌桶实现
+
+```java
+public class TokenBucket {
+    private final long capacity;
+    private final double refillRate;  // 令牌/秒
+    private double tokens;
+    private long lastRefill;
+
+    public synchronized boolean tryAcquire() {
+        refill();  // 按时间填充令牌
+        if (tokens >= 1) { tokens--; return true; }
+        return false;
+    }
+}
+```
+
+### 分布式限流（Redis + Lua）
+
+```lua
+-- 滑动窗口
+local key = KEYS[1]
+local now = redis.call('TIME')[1]
+redis.call('ZREMRANGEBYSCORE', key, 0, now - ARGV[1])
+if redis.call('ZCARD', key) < tonumber(ARGV[2]) then
+    redis.call('ZADD', key, now, now .. '-' .. math.random())
+    return 1
+end
+return 0
+```

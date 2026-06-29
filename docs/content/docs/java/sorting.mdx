@@ -1,0 +1,108 @@
+---
+title: 排序算法
+description: 快速排序、直接插入排序、希尔排序的原理与 Java 实现
+---
+
+## 一、快速排序
+
+### 原理
+
+1. 选择第一个数为基准值 p
+2. 小于 p 的数放在左边，大于 p 的数放在右边
+3. 递归对 p 左边和右边的子序列重复此过程
+
+时间复杂度：O(n log n)
+
+### Java 实现
+
+```java
+public static void quickSort(int[] a, int start, int end) {
+    if (start < end) {
+        int baseNum = a[start]; // 选基准值
+        int midNum;
+        int i = start;
+        int j = end;
+        do {
+            while ((a[i] < baseNum) && i < end) { i++; }
+            while ((a[j] > baseNum) && j > start) { j--; }
+            if (i <= j) {
+                midNum = a[i];
+                a[i] = a[j];
+                a[j] = midNum;
+                i++;
+                j--;
+            }
+        } while (i <= j);
+        if (start < j) { quickSort(a, start, j); }
+        if (end > i) { quickSort(a, i, end); }
+    }
+}
+```
+
+---
+
+## 二、直接插入排序
+
+### 原理
+
+视第一个数为有序序列，依次取后面 n-1 个数与有序序列从后往前比较，找到比 insertNum 大的数则后移一位，找到位置后插入。
+
+时间复杂度：O(n²)
+
+### Java 实现
+
+```java
+public void insertSort(int[] a) {
+    int len = a.length;
+    int insertNum;
+    for (int i = 1; i < len; i++) {
+        insertNum = a[i];
+        int j = i - 1;
+        while (j >= 0 && a[j] > insertNum) {
+            a[j + 1] = a[j];
+            j--;
+        }
+        a[j + 1] = insertNum;
+    }
+}
+```
+
+---
+
+## 三、希尔排序
+
+### 原理
+
+插入排序改进版，通过分组减少数据移动量：按间隔 len/2 分组，每组内插入排序，逐步缩小间隔。
+
+### Java 实现
+
+```java
+public void shellSort(int[] a) {
+    int len = a.length;
+    while (len != 0) {
+        len = len / 2;
+        for (int i = 0; i < len; i++) {
+            for (int j = i + len; j < a.length; j += len) {
+                int k = j - len;
+                int temp = a[j];
+                while (k >= 0 && temp < a[k]) {
+                    a[k + len] = a[k];
+                    k -= len;
+                }
+                a[k + len] = temp;
+            }
+        }
+    }
+}
+```
+
+---
+
+## 算法对比
+
+| 算法 | 平均时间 | 最坏时间 | 空间 | 稳定性 |
+|------|:------:|:------:|:---:|:---:|
+| 快速排序 | O(n log n) | O(n²) | O(log n) | 不稳定 |
+| 直接插入 | O(n²) | O(n²) | O(1) | 稳定 |
+| 希尔排序 | O(n log n) | O(n²) | O(1) | 不稳定 |

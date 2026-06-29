@@ -1,0 +1,116 @@
+---
+title: MCP（Model Context Protocol）
+description: Model Context Protocol 协议架构、核心概念、传输方式与实战
+---
+
+## 一、什么是 MCP
+
+**MCP** 是 Anthropic 提出的开放协议，标准化 LLM 与外部工具和数据源的交互方式。
+
+> 类比：MCP 之于 LLM 工具集成 = USB-C 之于外设连接。
+
+在 MCP 之前，每个 LLM 应用需要单独对接各个工具 API。MCP 统一了这个接口。
+
+## 二、核心架构
+
+```
+MCP Host（Claude Desktop / IDE）
+      ↓
+MCP Client（协议层 - JSON-RPC over stdio/SSE/HTTP）
+      ↓
+┌──────┬──────┬──────┐
+│Server│Server│Server│
+│ (文件)│ (数据库)│ (API) │
+└──────┴──────┴──────┘
+```
+
+### 三种角色
+
+| 角色 | 说明 | 示例 |
+|------|------|------|
+| **MCP Host** | 用户交互界面，发起请求 | Claude Desktop、VS Code |
+| **MCP Client** | 协议客户端，与 server 维持连接 | 内嵌于 Host |
+| **MCP Server** | 提供具体工具/资源 | 文件、数据库、第三方 API |
+
+## 三、核心概念
+
+### Tools（工具）
+
+LLM 可调用的函数，需提供 JSON Schema：
+
+```json
+{
+  "name": "read_file",
+  "description": "读取文件内容",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": { "type": "string", "description": "文件路径" }
+    },
+    "required": ["path"]
+  }
+}
+```
+
+### Resources（资源）
+
+只读数据，如文件内容、数据库记录。LLM 通过 URI 访问。
+
+### Prompts（提示模板）
+
+预定义 prompt 模板，快速调用。
+
+---
+
+## 四、传输机制
+
+| 传输 | 说明 | 适用 |
+|------|------|------|
+| **stdio** | 标准输入输出，进程内通信 | 本地 |
+| **SSE** | HTTP 流，服务器→客户端推送 | 远程、多客户端 |
+| **Streamable HTTP** | 双向流（新方案） | 生产推荐 |
+
+---
+
+## 五、构建 MCP Server
+
+```typescript
+// 定义工具
+server.tool(
+  "query_db",
+  "执行 SQL 查询并返回结果",
+  { sql: z.string().describe("SQL 查询") },
+  async ({ sql }) => {
+    const result = await db.query(sql);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+```
+
+注册到 Host：
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "node",
+      "args": ["./dist/index.js"]
+    }
+  }
+}
+```
+
+## 六、MCP vs 原生 Function Calling
+
+| 维度 | Function Calling | MCP |
+|------|:---:|:---:|
+| 标准化 | 各厂商格式不同 | 统一协议 |
+| 复用性 | 每个应用单独对接 | 一次开发多处用 |
+| 动态发现 | 需预定义 | 自动列出工具 |
+| 生态 | — | 社区 server 市场 |
+
+## 七、生态
+
+**官方/社区 Server**：Filesystem、GitHub、Postgres/SQLite、Playwright、Memory、Brave Search/Exa。
+
+**适用场景**：本地工具集成、企业数据访问、自动化工作流、Agent 能力扩展。

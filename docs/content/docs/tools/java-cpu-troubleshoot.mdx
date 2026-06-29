@@ -1,0 +1,57 @@
+---
+title: Java 进程 CPU 过高排查
+description: Java 进程 CPU 占用过高问题的排查方法与常用工具
+---
+
+## 基本思路
+
+1. 查找目标 Java 进程 PID
+2. 查找 CPU 占用较高线程 PID
+3. 查看对应的线程堆栈
+
+## 排查步骤
+
+### 1. 查找进程 PID
+
+```bash
+jps -l
+```
+
+### 2. 查找 CPU 占用较高线程
+
+```bash
+top -H -p <pid>
+```
+
+### 3. 查看线程堆栈
+
+将线程 PID 转为 16 进制后，使用 jstack：
+
+```bash
+# 假设线程 PID = 5845 → 0x16d5
+jstack <pid> | grep -A 10 0x16d5
+```
+
+### 4. GC 查看
+
+```bash
+jstat -gc <pid> 1000
+```
+
+输出各内存区域使用情况和 GC 次数/耗时。
+
+## 常见原因
+
+1. **计算密集型任务长时间运行** — 检查死循环或大量计算
+2. **程序死循环** — 检查 while/for 循环退出条件
+3. **内存泄漏导致频繁 GC** — 使用 `jstat -gc` 查看，若 FGC 持续增长则可能存在内存泄漏
+
+## 常用 JVM 排查命令
+
+| 命令 | 用途 |
+|------|------|
+| `jps -l` | 查看所有 Java 进程 |
+| `jstack <pid>` | 查看线程堆栈 |
+| `jmap -heap <pid>` | 查看堆内存映像 |
+| `jstat -gc <pid> <interval>` | 查看 GC 统计 |
+| `top -H -p <pid>` | 查看进程内线程 CPU 占用 |

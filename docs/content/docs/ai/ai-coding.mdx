@@ -1,0 +1,157 @@
+---
+title: AI Coding
+description: AI 辅助编程工作流、Prompt 工程技巧、Agentic Coding 原理与最佳实践
+---
+
+## 一、范式转变
+
+```
+传统：思考 → 写代码 → 调试 → 测试
+AI：  思考 → 描述要求 → AI 生成 → 审查 → 调试 → 测试
+```
+
+**核心能力转移**：编码能力 → 需求描述能力 + 代码审查能力
+
+### AI 编程工具谱系
+
+| 类型 | 代表 | 能力 |
+|------|------|------|
+| **代码补全** | GitHub Copilot, Cursor Tab | 行级/块级补全 |
+| **对话式** | ChatGPT, Claude Chat | 问答、生成、解释 |
+| **Agentic** | Claude Code, Cursor Agent | 读写文件、执行命令、Git 操作 |
+| **全自主** | Devin, Factory | 端到端开发任务 |
+
+---
+
+## 二、Prompt 工程（代码场景）
+
+### 结构化描述
+
+```
+差的: "帮我写个登录"
+好的:
+"用 Spring Boot 实现登录 API：
+- POST /api/login
+- 接收 { username, password }
+- 返回 JWT token（24h 有效期）
+- 密码 BCrypt 加密
+- 失败返回 401 + 错误原因
+- IP 限流：每分钟最多 5 次"
+```
+
+### Spec-driven 开发
+
+先写详细 Spec（接口定义、请求/响应格式、约束条件） → AI 实现 → 根据 Spec 验证。
+
+### 迭代式精炼
+
+生成初始版本 → Review 指出问题 → AI 修改 → 多轮迭代 → 最终审查和测试。
+
+### 示例驱动
+
+```java
+// 参考此风格实现 updateUser：
+public UserResponse createUser(CreateUserRequest req) {
+    validateRequest(req);
+    User user = userMapper.toEntity(req);
+    user = userRepository.save(user);
+    return userMapper.toResponse(user);
+}
+```
+
+---
+
+## 三、Agentic Coding
+
+> Agentic Coding 工具自主：读取代码库 → 理解上下文 → 修改文件 → 运行测试 → 修复错误 → Git 操作，形成完整开发闭环。
+
+### Claude Code 工作模式
+
+```
+用户指令 → 读取代码库 → 制定计划
+  → 编辑文件 → 运行测试 → 修复 → 提交
+  → 失败自动分析 → 修复 → 重测
+```
+
+### 高效使用技巧
+
+| 技巧 | 说明 |
+|------|------|
+| **明确上下文** | 告知技术栈和约束 |
+| **先探索后修改** | 先让 Agent 了解代码库 |
+| **分步验证** | 每完成子任务后运行测试 |
+| **详细 Spec** | 需求越具体，结果越可靠 |
+| **审查 diff** | 像 Code Review 一样审查 |
+| **项目规范** | 用 CLAUDE.md 设定规则 |
+
+### CLAUDE.md / Cursor Rules
+
+```markdown
+# 项目技术栈
+Java 17, Spring Boot 3.2, PostgreSQL, JPA
+
+# 代码规范
+- Controller 只做参数校验和路由
+- 业务逻辑在 Service 层
+- 统一异常处理用 @ControllerAdvice
+- 测试用 JUnit 5 + MockMvc
+
+# 命名约定
+Service: XxxService, DTO: XxxRequest/Response
+```
+
+---
+
+## 四、AI 代码审查要点
+
+| 维度 | 关注点 |
+|------|--------|
+| **正确性** | 逻辑正确？边界条件？ |
+| **安全性** | SQL 注入？XSS？敏感数据泄露？ |
+| **性能** | N+1 查询？大循环重复计算？ |
+| **可维护性** | 命名清晰？职责单一？ |
+| **依赖** | 是否引入不合适库？版本兼容？ |
+
+### AI 代码常见问题
+
+- **幻觉 API**：调用不存在的库方法
+- **过度实现**：需求简单但架构复杂
+- **忽略异常**：错误处理不完整
+- **不安全默认**：未开启安全配置
+- **风格不一致**：与现有代码不匹配
+
+---
+
+## 五、工作流最佳实践
+
+### 新功能开发
+
+```
+写 Spec（人工） → AI 生成实现 → Review diff → AI 生成测试 → 运行 → 修复 → PR
+```
+
+### Bug 修复
+
+```
+描述 Bug + 复现步骤 → AI 定位 → AI 修复方案 → Review → 确认 → AI 写回归测试
+```
+
+### 代码重构
+
+```
+描述目标 → AI 分析影响 → 分步执行 → 每步验证 → Review 最终 diff
+```
+
+### 关键原则
+
+> **AI 是副驾驶，不是自动驾驶。** 最终决策权和责任在开发者。
+
+---
+
+## 六、测试策略
+
+### AI + TDD
+
+1. 人写测试 → AI 实现 → 验证通过
+2. AI 写测试 → 人审查 → AI 实现 → 验证
+3. AI 生成代码 → AI 生成测试 → 人审查两者

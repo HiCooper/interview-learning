@@ -1,0 +1,4 @@
+{
+  "title": "AI",
+  "pages": ["index", "llm-basics", "agent-dev", "context-management", "rag", "mcp", "agent-eval", "ai-coding"]
+}

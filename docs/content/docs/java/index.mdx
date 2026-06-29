@@ -1,0 +1,45 @@
+---
+title: Java 基础概览
+description: Java 核心基础知识索引：线程池、AQS、synchronized、集合、JVM、NIO
+---
+
+Java 基础部分涵盖后端面试中最核心的知识点。
+
+## 内容导航
+
+<Cards>
+  <Card title="并发编程" href="/docs/java/concurrency" description="线程池、AQS、synchronized、ReentrantLock 对比" />
+  <Card title="集合框架" href="/docs/java/collections" description="HashMap、ConcurrentHashMap、红黑树" />
+  <Card title="排序算法" href="/docs/java/sorting" description="快速排序、直接插入排序、希尔排序" />
+  <Card title="JVM" href="/docs/java/jvm" description="类加载、内存布局、垃圾回收、GC 收集器" />
+  <Card title="NIO" href="/docs/java/nio" description="BIO vs NIO、零拷贝" />
+</Cards>
+
+## 知识点速览
+
+### 线程池
+- `ThreadPoolExecutor` 核心参数：`corePoolSize`、`maximumPoolSize`、`keepAliveTime`、`RejectedExecutionHandler`
+- `corePoolSize` 优化：计算密集型 = N(cpu)，IO 密集型 = 2N(cpu)
+- 淘汰策略：AbortPolicy（默认抛异常）、CallerRunsPolicy、DiscardPolicy、DiscardOldestPolicy
+
+### AQS
+- 基于 CLH 虚拟 FIFO 双向队列，`volatile` 修饰 `state`，CAS 机制修改状态
+- 模版方法模式：重写 `tryAcquire`、`tryRelease` 等方法
+
+### synchronized
+- 基于监视器(Monitor)模式，依赖底层操作系统 Mutex Lock
+- JDK6 后引入偏向锁 → 轻量级锁 → 重量级锁的升级机制
+- 与 ReentrantLock：简单场景优先 synchronized，需要公平锁/轮询锁/超时锁时用 ReentrantLock
+
+### HashMap
+- 数组 + 链表 + 红黑树（链表 ≥ 8 且容量 ≥ 64 时树化）
+- 非线程安全，ConcurrentHashMap 用 CAS + synchronized 实现线程安全
+
+### JVM
+- 类加载：加载 → 连接(验证→准备→解析) → 初始化，双亲委派模型
+- 内存：线程独享（程序计数器、虚拟机栈、本地方法栈），线程共享（堆、方法区）
+- GC 算法：标记-清除、复制、标记-整理、分代收集
+
+### NIO
+- 同步非阻塞 I/O 模型，I/O 多路复用的基础
+- 单线程轮询事件，连接数大时优势明显

@@ -1,0 +1,130 @@
+---
+title: 事件驱动架构
+description: 事件驱动核心概念、CQRS、Event Sourcing 与 Outbox 模式
+---
+
+## 一、为什么事件驱动
+
+传统同步调用链 A→B→C→D，任何一环失败都需处理且耦合紧密。
+
+事件驱动：A 发布事件 → B/C/D 各自订阅独立处理。**解耦、异步、可扩展**。
+
+## 二、核心概念
+
+### 事件（Event）
+
+描述「已经发生的事实」，命名用**过去时**：
+
+`OrderSubmitted` ✓（正确）、`SubmitOrder` ✗（是命令）
+
+```json
+{
+  "eventId": "evt_abc",
+  "eventType": "OrderSubmitted",
+  "timestamp": "2026-06-29T10:30:00Z",
+  "aggregateId": "order_456",
+  "payload": {
+    "userId": "user_789",
+    "totalAmount": { "amount": "99.99", "currency": "CNY" }
+  }
+}
+```
+
+### 命令 vs 事件
+
+| 维度 | 命令 | 事件 |
+|------|:---:|:---:|
+| 语义 | 请求做某事 | 某事已发生 |
+| 命名 | PlaceOrder | OrderPlaced |
+| 方向 | 明确目标 | 广播 |
+| 可拒绝 | 可以 | 不可以 |
+
+---
+
+## 三、CQRS（命令查询职责分离）
+
+将**读（Query）**和**写（Command）**分离为不同模型。
+
+```
+写操作 → Command Model（写库）→ 事件 → 读库同步
+读操作 → Query Model（读库，优化过的视图）
+```
+
+**优势**：读写各自优化、读模型可按需创建多个。
+**代价**：数据最终一致、架构复杂度增加。
+
+| 适用 | 不适用 |
+|------|--------|
+| 读写负载差异大 | 简单 CRUD |
+| 复杂查询需求 | 强一致性要求 |
+| 事件驱动体系 | 团队经验不足 |
+
+---
+
+## 四、Event Sourcing（事件溯源）
+
+不存当前状态，存储**所有状态变化事件**。状态 = 事件流重放。
+
+```
+传统：User { balance: 100 } → 直接更新为 150（旧值丢失）
+ES：  [存100]→[取50]→[存100] → 重放得余额 = 150
+```
+
+**优势**：完整审计日志、可查询历史状态、调试可重现。
+**挑战**：事件 schema 演化、需快照避免全量重放。
+
+---
+
+## 五、Outbox 模式
+
+### 问题
+
+DB 更新和消息发送的原子性：
+
+```
+db.updateOrder(order);    // 成功
+mq.send(event);            // 失败 → 不一致！
+```
+
+### 方案
+
+同一事务中写入发件箱表，异步轮询发送：
+
+```sql
+BEGIN;
+  UPDATE orders SET status = 'SUBMITTED' WHERE id = 456;
+  INSERT INTO outbox (event_id, event_type, payload) VALUES (...);
+COMMIT;
+
+-- 异步：轮询 outbox 表 → 发送 MQ → 标记已发送
+```
+
+```java
+@Transactional
+public void submitOrder(OrderId id) {
+    orderRepo.save(order.submit());
+    outboxRepo.save(new OutboxEvent("OrderSubmitted", order));
+}
+
+@Scheduled(fixedDelay = 100)
+public void publishOutbox() {
+    for (OutboxEvent e : outboxRepo.findUnpublished(100)) {
+        kafka.send(e.getType(), e.getPayload());
+        outboxRepo.markPublished(e.getId());
+    }
+}
+```
+
+> Outbox 轮询有延迟（~100ms-1s）。实时性要求更高可用 **Debezium + CDC** 监听 binlog。
+
+---
+
+## 六、事件驱动 vs 请求驱动
+
+| 维度 | 请求驱动 | 事件驱动 |
+|------|:---:|:---:|
+| 耦合 | 紧 | 松 |
+| 一致性 | 强（ACID） | 最终（事件+补偿） |
+| 调试 | 简单 | 复杂 |
+| 扩展 | 垂直为主 | 水平为主 |
+| 适用 | 事务性强、链路短 | 流程长、需解耦 |

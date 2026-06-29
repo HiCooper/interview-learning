@@ -1,0 +1,54 @@
+---
+title: Spring Cloud（微服务）
+description: Spring Cloud 全家桶核心组件、Eureka vs Nacos、配置中心设计
+---
+
+## 架构核心
+
+| 能力 | 组件 | 备注 |
+|------|------|------|
+| **服务治理** | Nacos/Consul | ~~Eureka~~ 已停更，推荐 Nacos |
+| **智能路由** | Spring Cloud LoadBalancer + **Gateway** | ~~Ribbon~~/~~Zuul~~ 已废弃 |
+| **声明式调用** | OpenFeign + LoadBalancer | 整合负载均衡与熔断 |
+| **容错限流** | **Sentinel** / Resilience4j | ~~Hystrix~~ 已停维，推荐 Sentinel |
+| **集中配置** | **Nacos** / Apollo | 替代 Spring Cloud Config + Bus |
+| **可观测性** | Micrometer Tracing + Zipkin/SkyWalking | ~~Sleuth~~ Spring Boot 3 已移除 |
+
+> **Spring Boot 3 / Spring Cloud 2022.0+ 要求 Java 17+**，大量旧组件（Eureka、Ribbon、Zuul、Hystrix、Sleuth）已被替代或移除。
+
+## 解决的问题
+
+单体架构扩展性差 → 微服务化后分布式复杂性（服务发现、容错、统一入口、配置管理）→ Spring Cloud 提供标准化基础设施。
+
+---
+
+## Top 面试问题
+
+### Q1：Eureka vs Nacos
+
+| 维度 | Eureka | Nacos |
+|------|--------|-------|
+| CAP 模型 | AP（优先可用性） | 支持 AP/CP 切换 |
+| 自我保护 | 可能导致无效节点保留 | 无 |
+| 健康检查 | 心跳 | TCP/HTTP/MySQL |
+| 功能 | 仅注册中心 | 注册 + 配置中心 |
+| 推送机制 | 轮询 | 长连接（gRPC 流） |
+
+> Nacos 长连接推送优于 Eureka 轮询。
+
+### Q2：微服务可靠调用设计
+
+- **OpenFeign + Spring Cloud LoadBalancer**：通过服务名调用，注册中心获取实例，负载均衡选择
+- **超时重试**：需协调 LoadBalancer 和 Sentinel 超时，重试保证幂等
+- **Sentinel**：流量控制、熔断降级、系统自适应保护，`@SentinelResource` 配置降级
+- **架构**：统一 fallback 工厂，与配置中心联动动态调整
+
+### Q3：生产级配置中心设计
+
+**核心**：持久化存储、推送变更、灰度发布、版本回滚、权限审计
+
+**Spring Cloud Config 局限**：依赖 Git，缺乏原生灰度，客户端被动监听
+
+**Nacos/Apollo 优势**：长轮询/长连接实时推送、命名空间隔离、丰富灰度策略（按实例/IP/标签）、可视化管理
+
+**架构要点**：集群高可用、本地兜底文件、敏感配置加密。

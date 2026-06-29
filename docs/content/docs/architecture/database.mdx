@@ -1,0 +1,123 @@
+---
+title: 数据库
+description: MySQL 事务隔离级别、InnoDB 锁机制、索引优化与 Spring 事务
+---
+
+## 一、事务 ACID
+
+| 特性 | 说明 |
+|------|------|
+| **原子性** | 事务不可分割，全做或全不做 |
+| **一致性** | 事务前后数据完整性一致 |
+| **隔离性** | 并发事务互不干扰 |
+| **持久性** | 提交后数据永久保存 |
+
+---
+
+## 二、事务隔离级别（InnoDB）
+
+| 级别 | 问题 | 实现 |
+|------|------|------|
+| **Read Uncommitted** | 脏读 | — |
+| **Read Committed** | 不可重复读 | 每次查询创建新 ReadView |
+| **Repeatable Read**（默认） | 幻读（部分解决） | 事务首次查询创建 ReadView（MVCC） |
+| **Serializable** | 性能最低 | 读加共享锁 |
+
+**幻读**：事务 A 更新全表，事务 B 新增记录，A 查询时发现还有未更新数据。
+
+> InnoDB 的 RR 级别通过 **MVCC + Gap Lock + Next-Key Lock** 实际上已解决了大部分幻读问题，但在 `SELECT ... FOR UPDATE` 或范围更新时仍可能出现。
+
+### MVCC 实现原理
+
+- 每行记录有两个隐藏列：`trx_id`（最后一次修改的事务 ID）和 `roll_pointer`（指向 undo log）
+- **ReadView** 记录当前活跃事务 ID 列表
+- 根据 ReadView 判断数据版本可见性，读取 undo log 中的历史版本
+
+**实现方式**：
+- RR：MVCC 版本控制，读取快照
+- Serializable：读加共享锁，写加排他锁
+
+---
+
+## 三、InnoDB 锁机制
+
+### 行级锁
+
+| 类型 | 说明 |
+|------|------|
+| **共享锁 (S)** | 允许读一行 |
+| **排他锁 (X)** | 允许删除/更新一行 |
+
+### 意向锁
+
+| 类型 | 说明 |
+|------|------|
+| **意向共享锁 (IS)** | 想获得表中某几行的共享锁 |
+| **意向排他锁 (IX)** | 想获得表中某几行的排他锁 |
+
+### 一致性非锁定读（MVCC）
+
+读取行正在进行 UPDATE/DELETE 时，读操作不阻塞，而是读取快照数据。
+
+---
+
+## 四、Spring 事务
+
+### 异常回滚
+
+- 默认对 **RuntimeException** 回滚
+- checked 异常不回滚
+
+```java
+@Transactional(rollbackFor = Exception.class)      // checked 也回滚
+@Transactional(noRollbackFor = RuntimeException.class) // unchecked 不回滚
+```
+
+### 七种传播属性
+
+| 行为 | 说明 |
+|------|------|
+| **REQUIRED**（默认） | 有则加入，无则新建 |
+| **SUPPORTS** | 有则加入，无则以非事务 |
+| **MANDATORY** | 必须有事务，否则抛异常 |
+| **REQUIRES_NEW** | 新建事务，挂起当前 |
+| **NOT_SUPPORTED** | 非事务执行，挂起当前 |
+| **NEVER** | 非事务，有事务则抛异常 |
+| **NESTED** | 嵌套事务 |
+
+---
+
+## 五、索引优化
+
+### 索引失效场景
+
+| 场景 | 效果 |
+|------|------|
+| 使用不等式 `!=` `<>` | 索引失效 |
+| 类型不一致 | 不一致列后索引失效 |
+| 函数计算 | 计算列后索引失效 |
+| `LIKE '%xxx'` 前缀模糊 | 索引失效 |
+| 不适用复合索引首列 | 索引失效 |
+
+### 复合索引
+
+遵循**最左前缀原则**，查询条件必须从索引的最左列开始匹配。
+
+### MySQL 8.0+ 新特性
+
+| 特性 | 说明 |
+|------|------|
+| **窗口函数** | `ROW_NUMBER()`、`RANK()`、`LAG()`/`LEAD()` 等 |
+| **CTE** | `WITH RECURSIVE` 递归查询 |
+| **原子 DDL** | DDL 原子操作，不再部分失败 |
+| **不可见索引** | `ALTER TABLE ... ALTER INDEX ... INVISIBLE` |
+| **降序索引** | 真正支持 DESC 索引 |
+| **hash join** | 替代部分嵌套循环 join |
+
+### EXPLAIN ANALYZE（MySQL 8.0.18+）
+
+```sql
+EXPLAIN ANALYZE SELECT ... ;
+```
+
+实际执行查询并返回每步的实际耗时和行数，比传统 EXPLAIN 更精确。

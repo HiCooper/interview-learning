@@ -1,0 +1,50 @@
+---
+title: Netty（网络编程）
+description: Netty 零拷贝技术、ByteBuf 操作与操作系统 sendfile 原理
+---
+
+## 概述
+
+Netty 是一个异步事件驱动的网络应用框架，用于快速开发可维护的高性能协议服务器和客户端。
+
+---
+
+## 零拷贝（Zero-Copy）
+
+> Netty Zero-Copy 区别于操作系统层面的 Zero-Copy。操作系统层关注避免用户态和内核态数据拷贝，Netty 关注**用户态数据操作的优化**。
+
+### Netty 零拷贝体现
+
+| 特性 | 说明 |
+|------|------|
+| **CompositeByteBuf** | 将多个 ByteBuf 组合为一个逻辑 ByteBuf |
+| **wrap 方法** | 将 `byte[]`、`ByteBuf`、`ByteBuffer` 包装为 Netty ByteBuf |
+| **slice 操作** | 将 ByteBuf 分为共享同一内存区域的多个 ByteBuf |
+| **FileRegion** | 包装 `FileChannel.transferTo()` 实现零拷贝文件传输 |
+
+### transferTo 底层原理
+
+`FileChannel.transferTo()` 依赖 Linux 内核 **`sendfile`** 函数：
+
+1. DMA 将数据读取到**内核缓冲区**（Read Buffer）
+2. 更新即将发送的数据偏移量
+3. 将数据从 Read Buffer 复制到**网卡设备缓冲区**（NIC Buffer）
+
+整个过程数据**无需经过用户空间**，避免了内核态到用户态的拷贝。
+
+---
+
+## ByteBuf 操作
+
+| 操作 | 说明 |
+|------|------|
+| **CompositeByteBuf** | 逻辑组合，避免内存拷贝 |
+| **wrap** | 包装已有字节数据 |
+| **slice** | 零拷贝切片，共享内存 |
+
+## 关键特点
+
+- **异步非阻塞 I/O**：基于 Java NIO，高并发性能优异
+- **事件驱动**：ChannelPipeline + ChannelHandler 处理网络事件
+- **零拷贝**：减少数据内存复制次数
+- **可扩展**：灵活的线程模型和处理器链

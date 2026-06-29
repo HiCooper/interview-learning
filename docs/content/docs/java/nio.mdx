@@ -1,0 +1,52 @@
+---
+title: Java NIO
+description: BIO vs NIO 对比，I/O 模型与零拷贝技术
+---
+
+## 概述
+
+NIO 是一种**同步非阻塞**的 I/O 模型，也是 I/O 多路复用的基础，主要解决高并发与大量连接 I/O 处理问题。
+
+## I/O 模型对比
+
+所有系统 I/O 都分为两个阶段：**等待就绪**和**真正的读写操作**。
+
+- 等待就绪的阻塞不使用 CPU（"空等"）
+- 真正的读写操作使用 CPU 且非常快（memory copy，带宽 1GB/s 以上）
+
+| 模型 | 行为 |
+|------|------|
+| **BIO** | 读 → 阻塞到读到数据为止 |
+| **NIO** | 读 → 有数据就返回，无数据返回 0，不会阻塞 |
+
+## NIO 的核心优势
+
+NIO 由原来的**阻塞读写（占用线程）**变成了**单线程轮询事件**。除了事件轮询是阻塞的，剩余 I/O 操作都是纯 CPU 操作，无需多线程。
+
+线程节约使得连接数大时线程切换问题随之解决，为处理海量连接提供了可能。
+
+## BIO vs NIO vs AIO
+
+| 模型 | 阻塞 | 说明 |
+|------|:----:|------|
+| **BIO** | 同步阻塞 | 一个连接一个线程，连接多时资源消耗高 |
+| **NIO** | 同步非阻塞 | 单线程管理多连接，Selector 轮询就绪事件 |
+| **AIO** | 异步非阻塞 | 操作系统回调通知 |
+
+## Netty 中的零拷贝
+
+> Netty Zero-Copy 区别于操作系统层面的 Zero-Copy（避免用户态和内核态数据拷贝），关注**用户态数据操作的优化**。
+
+### Netty 零拷贝体现
+
+1. **CompositeByteBuf**：多个 ByteBuf 组合为一个逻辑 ByteBuf
+2. **wrap**：将 `byte[]`、`ByteBuf`、`ByteBuffer` 包装为 Netty ByteBuf
+3. **slice**：将 ByteBuf 分为共享同一内存区域的多个 ByteBuf
+4. **FileRegion**：包装 `FileChannel.transferTo()` 实现文件传输，直接发送到目标 channel
+
+### transferTo 底层原理
+
+依赖 Linux 内核 **`sendfile`** 函数：
+1. DMA 读取数据到内核缓冲区
+2. 更新数据偏移量
+3. 数据从 Read Buffer 复制到网卡设备缓冲区
