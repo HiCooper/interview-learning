@@ -17,9 +17,6 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: docs
 
     steps:
       - uses: actions/checkout@v4
@@ -27,14 +24,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: docs/package-lock.json
 
-      - name: Install dependencies
+      # Build docs site (fumadocs)
+      - name: Install docs dependencies
         run: npm ci
+        working-directory: docs
 
-      - name: Build
+      - name: Build docs
         run: npm run build
+        working-directory: docs
+
+      # Build study app (React + shadcn)
+      - name: Install study-app dependencies
+        run: npm ci
+        working-directory: study-app
+
+      - name: Build study app
+        run: npm run build
+        working-directory: study-app
+
+      # Merge: copy study-app build into docs output as /study/
+      - name: Merge study app into docs
+        run: cp -r study-app/dist docs/out/study
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
