@@ -1,0 +1,78 @@
+---
+title: 最长连续子序列
+description: 动态规划求解最长连续递增子序列（Longest Continuous Increasing Subsequence），O(n²) 解法
+---
+
+## 问题描述
+
+给定一个未排序的整数数组，找到最长连续递增序列的长度。要求算法的时间复杂度为 O(n)。
+
+**示例 1:**
+- 输入: `[100, 4, 200, 1, 3, 2]`
+- 输出: `2`
+- 解释: 最长连续序列是 `[1, 2]` 或 `[100, 200]`，最大长度为 2
+
+**示例 2:**
+- 输入: `[0, 3, 7, 2, 5, 8, 4, 6, 0, 1]`
+- 输出: `4`
+- 解释: 最长连续序列如 `[0, 2, 5, 8]` 或 `[0, 3, 7, 8]`，最大长度为 4
+
+## 解法：动态规划
+
+### 思路
+
+定义 `dp[i]` 为以 `nums[i]` 结尾的最长递增子序列长度。对于每个 `i`，遍历 `j ∈ [0, i)`，如果 `nums[i] > nums[j]`，则可以接在 `nums[j]` 后面：
+
+```
+dp[i] = max(dp[i], dp[j] + 1)
+```
+
+最终答案为 `max(dp[0...n-1])`。
+
+### 复杂度分析
+
+| 指标 | 值 |
+|------|-----|
+| 时间复杂度 | O(n²) |
+| 空间复杂度 | O(n) |
+
+### Java 实现
+
+```java
+import java.util.Arrays;
+
+public class LongestIncreasingSubsequence {
+
+    public static void main(String[] args) {
+        int[] nums = {0, 3, 7, 2, 5, 8, 4, 6, 0, 1};
+        System.out.println("最长连续序列长度：" + lengthOfLIS(nums));
+    }
+
+    /**
+     * 最长连续子序列长度
+     */
+    public static int lengthOfLIS(int[] nums) {
+        if (nums == null || nums.length == 0) {
+            return 0;
+        }
+        int n = nums.length;
+        int[] dp = new int[n];
+        Arrays.fill(dp, 1);
+        for (int i = 1; i < n; i++) {
+            for (int j = 0; j < i; j++) {
+                if (nums[i] > nums[j]) {
+                    dp[i] = Math.max(dp[i], dp[j] + 1);
+                }
+            }
+        }
+        return Arrays.stream(dp).max().getAsInt();
+    }
+}
+```
+
+## 关键点
+
+- **状态定义**: `dp[i]` 表示以第 `i` 个元素结尾的最长递增子序列长度
+- **状态转移**: 向前查找所有比当前元素小的位置，取最大 dp 值 + 1
+- **初始化**: 每个位置至少为 1（自身）
+- **结果**: 遍历 dp 数组取最大值，而非返回 `dp[n-1]`

@@ -1,0 +1,34 @@
+---
+title: Leetcode 刷题笔记
+description: 常见 Leetcode 算法题解：动态规划、双指针、背包问题、回文子串等
+---
+
+Leetcode 高频算法题解合集，涵盖动态规划、双指针、哈希表等常见解题思路。
+
+## 题目导航
+
+<Cards>
+  <Card title="最长连续子序列" href="/docs/leetcode/longest-increasing-subsequence" description="动态规划经典问题，O(n²) 解法" />
+  <Card title="最小路径和" href="/docs/leetcode/minimum-path-sum" description="网格 DP，含路径回溯" />
+  <Card title="背包问题" href="/docs/leetcode/knapsack" description="完全背包（物品可重复）" />
+  <Card title="最大子序和" href="/docs/leetcode/maximum-subarray" description="Kadane 算法，O(n) 时间 O(1) 空间" />
+  <Card title="最长回文子串" href="/docs/leetcode/longest-palindromic-substring" description="区间 DP，O(n²) 解法" />
+  <Card title="接雨水问题" href="/docs/leetcode/trapping-rain-water" description="双指针经典题，O(n) 时间 O(1) 空间" />
+  <Card title="2Sum / 3Sum / 4Sum" href="/docs/leetcode/n-sum" description="哈希表 + 双指针，N 数之和通解" />
+</Cards>
+
+## 算法分类速览
+
+### 动态规划
+- **最长连续子序列** — 一维 DP，`dp[i]` 表示以 `i` 结尾的最长递增子序列长度
+- **最小路径和** — 二维 DP，从左上到右下，记录前驱节点回溯路径
+- **背包问题** — 二维 DP，`dp[i][w]` 表示前 `i` 个物品放入容量 `w` 的最大价值
+- **最大子序和** — Kadane 算法，贪心 + DP 思想
+- **最长回文子串** — 区间 DP，`dp[i][j]` 表示 `s[i..j]` 是否为回文
+
+### 双指针
+- **接雨水** — 左右指针向中间收缩，维护 `leftMax` / `rightMax`
+- **3Sum / 4Sum** — 排序 + 固定前 N-2 个元素 + 双指针查找
+
+### 哈希表
+- **2Sum** — HashMap 存储已遍历元素，一次遍历 O(n)

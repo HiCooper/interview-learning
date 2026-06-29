@@ -1,0 +1,105 @@
+---
+title: 背包问题
+description: 完全背包问题（物品可重复选取）— 二维 DP，dp[i][w] 状态转移
+---
+
+## 问题描述
+
+给定两个整数数组 `weights` 和 `values`：
+- `weights[i]` — 第 `i` 个物品的重量
+- `values[i]` — 第 `i` 个物品的价值
+
+另有一个最大容量 `W` 的背包。**物品可重复选取（完全背包）**，求解如何选择物品使得装入背包的物品总重量不超过 `W` 的情况下，总价值最大化。
+
+**示例:**
+```
+weights = [1, 3, 4]
+values  = [1, 4, 5]
+capacity = 5
+
+最大价值 = 6
+解释: 物品1(w=1,v=1) × 2 + 物品2(w=3,v=4) = 重量5, 价值6
+```
+
+## 解法：二维动态规划
+
+### 思路
+
+定义 `dp[i][w]` 表示前 `i` 个物品放入容量为 `w` 的背包的最大价值。
+
+**DP 表推演 (capacity=5):**
+
+| i\w | 0 | 1 | 2 | 3 | 4 | 5 |
+|-----|---|---|---|---|---|---|
+| 0(不放) | 0 | 0 | 0 | 0 | 0 | 0 |
+| 1(w=1,v=1) | 0 | 1 | 2 | 3 | 4 | 5 |
+| 2(w=3,v=4) | 0 | 1 | 2 | 4 | 5 | 6 |
+| 3(w=4,v=5) | 0 | 1 | 2 | 4 | 5 | 6 |
+
+**状态转移:**
+- 如果 `weights[i-1] ≤ w`（放得下）：
+  - 计算可以放多少个 `n = w / weights[i-1]`
+  - `x = n × values[i-1]` + 剩余空间的最大价值
+  - `dp[i][w] = max(dp[i-1][w], x)`
+- 否则：`dp[i][w] = dp[i-1][w]`（放不下，继承上一行）
+
+### 复杂度分析
+
+| 指标 | 值 |
+|------|-----|
+| 时间复杂度 | O(n × W) |
+| 空间复杂度 | O(n × W) |
+
+### Java 实现
+
+```java
+public class KnapsackFind {
+
+    public static void main(String[] args) {
+        int[] weights = {1, 3, 4};
+        int[] values = {1, 4, 5};
+        int capacity = 5;
+        int res = knapsackFind(weights, values, capacity);
+        System.out.println("最大价值: " + res);
+    }
+
+    /**
+     * dp[i][w]: 前 i 个物品放入容量为 w 的背包的最大价值
+     *
+     * dp 表:
+     *   0  1  2  3  4  5  <- 背包容量 w
+     * 0 [0, 0, 0, 0, 0, 0]
+     * 1 [0, 1, 2, 3, 4, 5]
+     * 2 [0, 1, 2, 4, 5, 6]
+     * 3 [0, 1, 2, 4, 5, 6]
+     */
+    private static int knapsackFind(int[] weights, int[] values, int capacity) {
+        int[][] dp = new int[weights.length + 1][capacity + 1];
+
+        for (int i = 1; i <= weights.length; i++) {
+            for (int w = 1; w <= capacity; w++) {
+                if (weights[i - 1] <= w) {
+                    // 可以放 n 个 i
+                    int n = w / weights[i - 1];
+                    // n 个 i 的价值
+                    int x = n * values[i - 1];
+                    // 还有剩余空间
+                    if (w % weights[i - 1] > 0) {
+                        x += dp[i - 1][w % weights[i - 1]];
+                    }
+                    dp[i][w] = Math.max(dp[i - 1][w], x);
+                } else {
+                    dp[i][w] = dp[i - 1][w];
+                }
+            }
+        }
+        return dp[weights.length][capacity];
+    }
+}
+```
+
+## 关键点
+
+- **完全背包 vs 01背包**: 此题物品可重复选取，所以计算当前物品价值时直接用 `w / weight[i-1]` 计算可放入的最大数量
+- **dp 表维度**: `[n+1][W+1]`，第 0 行/列初始化为 0
+- **状态来源**: 要么不选当前物品（继承上一行），要么选 k 个当前物品 + 剩余空间最优解

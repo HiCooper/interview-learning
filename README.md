@@ -48,6 +48,11 @@ npm run build      # 生产构建
 - Agent 评测（Evals 方法论、LLM-as-Judge、质量门禁）
 - AI Coding（Prompt 工程、Agentic Coding、CLAUDE.md）
 
+### Leetcode 刷题
+- **动态规划** — 最长连续子序列、最小路径和、背包问题、最大子序和、最长回文子串
+- **双指针** — 接雨水问题
+- **哈希表 + 双指针** — 2Sum、3Sum、4Sum
+
 ### 工具与运维
 - SSH 免密登录
 - Git Submodule
@@ -87,5 +92,6 @@ interview-learning/
         ├── middleware/            # 中间件（7 篇）
         ├── architecture/          # 架构设计（8 篇）
         ├── ai/                    # AI（8 篇）
-        └── tools/                 # 工具（3 篇）
+        ├── tools/                 # 工具（3 篇）
+        └── leetcode/              # Leetcode 刷题（7 篇）
 ```
