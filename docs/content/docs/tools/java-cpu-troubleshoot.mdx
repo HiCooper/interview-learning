@@ -12,7 +12,7 @@ description: Java 进程 CPU 占用过高问题的排查方法与常用工具
 ## 速查卡
 
 - **排查三步**：jps -l（找PID）→ top -H -p（找高CPU线程）→ jstack（看堆栈，线程ID转16进制）
-- **GC排查**：jstat -gc <pid> <interval>，关注FGC次数是否持续增长
+- **GC排查**：`jstat -gc <pid> <interval>`，关注FGC次数是否持续增长
 - **常见原因**：计算密集/死循环 → 内存泄漏导致频繁GC → 锁竞争导致自旋
 - **关键命令**：jps（进程列表）→ jstack（线程堆栈）→ jmap -heap（内存映像）→ jstat -gc（GC统计）
 
@@ -60,7 +60,7 @@ jstat -gc <pid> 1000
 | `jps -l` | 查看所有 Java 进程 |
 | `jstack <pid>` | 查看线程堆栈 |
 | `jmap -heap <pid>` | 查看堆内存映像 |
-| `jstat -gc <pid> <interval>` | 查看 GC 统计 |
+| ``jstat -gc <pid> <interval>`` | 查看 GC 统计 |
 | `top -H -p <pid>` | 查看进程内线程 CPU 占用 |
 
 ---
