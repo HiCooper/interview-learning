@@ -1,4 +1,4 @@
 {
   "title": "架构设计",
-  "pages": ["oauth", "design-patterns", "database", "caching", "ddd", "event-driven", "high-concurrency", "distributed-consistency"]
+  "pages": ["database", "caching", "distributed-consistency", "high-concurrency", "ddd", "event-driven", "oauth", "design-patterns"]
 }
