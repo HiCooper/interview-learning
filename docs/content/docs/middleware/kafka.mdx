@@ -56,6 +56,35 @@ Kafka 是一个**分布式流平台**，三个关键功能：
 
 ## 消费者组
 
+```mermaid
+flowchart TB
+    subgraph Topic["Topic: orders (4 分区)"]
+        P0["Partition 0"]
+        P1["Partition 1"]
+        P2["Partition 2"]
+        P3["Partition 3"]
+    end
+
+    subgraph CG1["Consumer Group A（负载均衡）"]
+        C1["Consumer 1"]
+        C2["Consumer 2"]
+    end
+
+    subgraph CG2["Consumer Group B（广播）"]
+        C3["Consumer 3"]
+    end
+
+    P0 --> C1
+    P1 --> C1
+    P2 --> C2
+    P3 --> C2
+
+    P0 --> C3
+    P1 --> C3
+    P2 --> C3
+    P3 --> C3
+```
+
 | 场景 | 行为 |
 |------|------|
 | 同一消费者组 | 记录在实例间负载均衡（类似队列） |

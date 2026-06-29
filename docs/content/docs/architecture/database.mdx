@@ -93,6 +93,26 @@ description: MySQL 事务隔离级别、InnoDB 锁机制、索引优化与 Sprin
 
 单表数据量过大（> 2000 万行或 >10GB）时，查询性能急剧下降。单库连接数、IOPS 成为瓶颈。
 
+```mermaid
+flowchart TB
+    subgraph 拆分前["拆分前"]
+        DB1["单库单表<br/>order 表 5000 万行<br/>连接数 2000/上限<br/>IOPS 瓶颈"]
+    end
+
+    subgraph 拆分后["拆分后（4 库 × 4 表）"]
+        DB_A["库 0"]
+        DB_B["库 1"]
+        DB_C["库 2"]
+        DB_D["库 3"]
+    end
+
+    拆分前 -->|"水平拆分<br/>user_id % 16"| 拆分后
+
+    subgraph 路由["分片路由"]
+        Proxy["Proxy/ShardingSphere<br/>SQL 解析 → 路由 → 改写 → 执行 → 归并"]
+    end
+```
+
 ### 垂直拆分 vs 水平拆分
 
 | 维度 | 垂直拆分 | 水平拆分 |
@@ -169,24 +189,33 @@ description: MySQL 事务隔离级别、InnoDB 锁机制、索引优化与 Sprin
 
 ### 双写 + 灰度切流
 
-```
-阶段 1: 双写（写新旧两套，读旧）
-        请求 → 写旧库 ────→ 读旧库
-              ↘ 写新库（异步，容忍失败）
-              
-阶段 2: 历史数据迁移（离线批量）
-        旧库数据 → 数据迁移工具 → 新库
-        （DataX/Canal/DTS）
-        
-阶段 3: 数据校验
-        对比新旧数据是否一致
-        
-阶段 4: 灰度切读
-        1% → 10% → 50% → 100% 流量读新库
-        
-阶段 5: 停写旧库
-        停止双写，全部读写新库
-        观察期后清理旧库
+```mermaid
+flowchart TB
+    subgraph S1["阶段 1: 双写"]
+        App1["应用"] -->|"写"| Old1["旧库"]
+        App1 -.->|"异步写（容忍失败）"| New1["新库"]
+        App1 -->|"读"| Old1
+    end
+
+    subgraph S2["阶段 2: 历史迁移"]
+        Old2["旧库"] -->|"DataX/Canal<br/>批量同步"| New2["新库"]
+    end
+
+    subgraph S3["阶段 3: 数据校验"]
+        Check["全量 + 增量比对"] --> Old3["旧库"]
+        Check --> New3["新库"]
+    end
+
+    subgraph S4["阶段 4: 灰度切读"]
+        Router["路由层"] -->|"1% → 10% → 50% → 100%"| New4["新库"]
+        Router -->|"剩余流量"| Old4["旧库"]
+    end
+
+    subgraph S5["阶段 5: 下线旧库"]
+        Final["全部读写新库<br/>旧库保留观察期"]
+    end
+
+    S1 --> S2 --> S3 --> S4 --> S5
 ```
 
 ### 各阶段详解

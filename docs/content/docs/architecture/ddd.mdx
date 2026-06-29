@@ -103,11 +103,33 @@ public class Order {  // 聚合根
 
 ## 四、六边形架构
 
-```
-      HTTP ──→  Port (接口)  ←── DB
-      MQ  ──→                ←── 外部API
-                 Domain Model
-              (核心，无外部依赖)
+```mermaid
+flowchart TB
+    subgraph Adapters["适配器层（外部）"]
+        HTTP["HTTP Controller"]
+        MQ["MQ Listener"]
+        DB_Adapter["JPA Repository"]
+        API["外部 API Client"]
+    end
+
+    subgraph Ports["端口层（接口定义）"]
+        InPort["入站端口<br/>OrderService 接口"]
+        OutPort["出站端口<br/>OrderRepository 接口"]
+    end
+
+    subgraph Domain["领域层（核心 · 无外部依赖）"]
+        Aggregate["聚合根 Order"]
+        Entity["实体 OrderItem"]
+        VO["值对象 Money"]
+        Event["领域事件 OrderSubmitted"]
+    end
+
+    HTTP -->|"实现"| InPort
+    MQ -->|"实现"| InPort
+    InPort -->|"依赖"| Aggregate
+    Aggregate -->|"依赖"| OutPort
+    OutPort -->|"实现"| DB_Adapter
+    OutPort -->|"实现"| API
 ```
 
 - **端口（Port）**：定义接口（如 `OrderRepository` 接口）

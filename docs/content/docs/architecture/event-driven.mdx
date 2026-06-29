@@ -45,9 +45,18 @@ description: 事件驱动核心概念、CQRS、Event Sourcing 与 Outbox 模式
 
 将**读（Query）**和**写（Command）**分离为不同模型。
 
-```
-写操作 → Command Model（写库）→ 事件 → 读库同步
-读操作 → Query Model（读库，优化过的视图）
+```mermaid
+flowchart LR
+    User["用户请求"] --> Router{"路由"}
+
+    Router -->|"写操作"| CmdAPI["Command API"]
+    Router -->|"读操作"| QryAPI["Query API"]
+
+    CmdAPI --> WriteDB[("写库<br/>（规范化）")]
+    WriteDB -->|"领域事件"| Sync["事件同步"]
+
+    Sync --> ReadDB[("读库<br/>（宽表/视图优化）")]
+    QryAPI --> ReadDB
 ```
 
 **优势**：读写各自优化、读模型可按需创建多个。
@@ -89,6 +98,29 @@ mq.send(event);            // 失败 → 不一致！
 ### 方案
 
 同一事务中写入发件箱表，异步轮询发送：
+
+```mermaid
+sequenceDiagram
+    participant Svc as 业务服务
+    participant DB as 数据库
+    participant Outbox as 发件箱表
+    participant Poll as 轮询任务
+    participant MQ as 消息队列
+
+    Svc->>DB: BEGIN 事务
+    Svc->>DB: UPDATE orders SET status='SUBMITTED'
+    Svc->>Outbox: INSERT INTO outbox (event_id, type, payload)
+    Svc->>DB: COMMIT
+
+    Note over Outbox,Poll: 异步（100ms~1s 延迟）
+    Poll->>Outbox: SELECT * FROM outbox WHERE published=false
+    Outbox-->>Poll: 未发布事件列表
+    Poll->>MQ: 发送事件
+    MQ-->>Poll: 确认
+    Poll->>Outbox: UPDATE published=true
+
+    MQ-->>Consumer: 投递事件
+```
 
 ```sql
 BEGIN;

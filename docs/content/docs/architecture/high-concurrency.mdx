@@ -26,13 +26,22 @@ String code = Base62.encode(id);      // → "dnh8f"
 
 ### 架构
 
-```
-用户 → Nginx LB → 短链服务集群
-                    ├── Redis (热点缓存)
-                    └── MySQL (分库分表)
-```
+```mermaid
+flowchart TB
+    User["用户"] --> LB["Nginx 负载均衡"]
+    LB --> S1["短链服务 1"]
+    LB --> S2["短链服务 2"]
 
-**关键**：Redis 缓存热点、布隆过滤器拦截不存在短码、301（永久）vs 302（统计）。
+    S1 --> Redis["Redis 热点缓存"]
+    S1 --> BF["布隆过滤器<br/>拦截不存在短码"]
+    S2 --> Redis
+    S2 --> BF
+
+    S1 --> MySQL["MySQL 分库分表<br/>短码 → 长链映射"]
+    S2 --> MySQL
+
+    Redis -->|"未命中"| MySQL
+```
 
 ---
 
@@ -185,19 +194,31 @@ end
 
 ### 多层限流架构
 
-```
-用户请求
-  │
-  ▼
-┌─────────────────────┐
-│ 1. Nginx 网关限流     │ ← IP 级别（漏桶），防恶意刷
-├─────────────────────┤
-│ 2. API Gateway 限流  │ ← 接口级别（令牌桶），按 API 限流
-├─────────────────────┤
-│ 3. 应用 Sentinel 限流 │ ← 方法级别，热点参数限流
-├─────────────────────┤
-│ 4. 业务逻辑处理       │
-└─────────────────────┘
+```mermaid
+flowchart TB
+    User["用户请求"] --> L1
+
+    subgraph L1["第一层: Nginx 网关限流"]
+        NW["limit_req 模块<br/>漏桶算法<br/>IP 级别 · 防恶意刷"]
+    end
+
+    L1 --> L2
+
+    subgraph L2["第二层: API Gateway 限流"]
+        GW["Spring Cloud Gateway<br/>令牌桶算法<br/>接口级别 · 按 API 限流"]
+    end
+
+    L2 --> L3
+
+    subgraph L3["第三层: 应用限流"]
+        SL["Sentinel / Resilience4j<br/>方法级别 · 热点参数限流"]
+    end
+
+    L3 --> Biz["业务逻辑处理"]
+
+    L1 -.->|"拒绝"| Reject1["429 Too Many Requests"]
+    L2 -.->|"拒绝"| Reject2["限流降级响应"]
+    L3 -.->|"拒绝"| Fallback["Fallback 兜底"]
 ```
 
 ### 限流 vs 熔断 vs 降级

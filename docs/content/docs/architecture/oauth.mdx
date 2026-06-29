@@ -9,6 +9,26 @@ OAuth 2.0 的标准是 **RFC 6749**。其核心是向第三方应用颁发令牌
 
 > OAuth 引入了一个授权层，用来分离两种不同的角色：客户端和资源所有者。资源所有者同意以后，资源服务器可以向客户端颁发令牌。客户端通过令牌，去请求数据。
 
+### 整体流程
+
+```mermaid
+sequenceDiagram
+    participant User as 资源所有者<br/>(用户)
+    participant Client as 第三方应用<br/>(客户端)
+    participant Auth as 授权服务器<br/>(B 网站)
+    participant RS as 资源服务器<br/>(B 网站 API)
+
+    User->>Client: 1. 点击"用 B 账号登录"
+    Client->>Auth: 2. 重定向到授权页面
+    Auth->>User: 3. 展示授权确认页
+    User->>Auth: 4. 用户同意授权
+    Auth->>Client: 5. 回调 redirect_uri，返回授权码
+    Client->>Auth: 6. 用授权码换取 access_token
+    Auth-->>Client: 7. 返回 access_token + refresh_token
+    Client->>RS: 8. 携带 access_token 请求资源
+    RS-->>Client: 9. 返回用户数据
+```
+
 ## 前置条件
 
 不管哪种授权方式，第三方应用都必须先到系统备案，拿到两个身份识别码：
