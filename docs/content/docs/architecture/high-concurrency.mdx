@@ -91,40 +91,121 @@ ZRANK rank user_1
 
 ## 四、限流策略
 
-| 算法 | 特点 |
-|------|------|
-| 固定窗口 | 100/min，边界突发可能翻倍 |
-| 滑动窗口 | 更平滑 |
-| 漏桶 | 恒定速率 |
-| **令牌桶** | 允许突发，最常用 |
+限流是保护系统的第一道防线，防止突发流量击垮服务。
+
+### 四种算法对比
+
+| 算法 | 原理 | 突发 | 平滑 | 复杂度 | 适用 |
+|------|------|:---:|:---:|:---:|------|
+| **固定窗口** | 窗口内请求数 < N，边界可翻倍 | ✓ | ✗ | 低 | 粗粒度保护 |
+| **滑动窗口** | 窗口细分多格，统计更平滑 | ✗ | ✓ | 中 | 精确控制 |
+| **漏桶** | 恒定速率流出，超出排队/丢弃 | ✗ | ✓✓ | 低 | 流量整形 |
+| **令牌桶** | 恒定速率放入令牌，允许突发取走 | ✓ | ✓ | 中 | **最常用** |
+
+### 算法图解
+
+```
+固定窗口（边界问题）：      令牌桶：
+| 100 req/min              ┌─────────┐
+| ┌────┬────┐              │ Token   │ ← 以恒定速率填充
+| │ 80 │100 │ ← 翻倍!      │┌─┐┌─┐┌─┐│
+| └────┴────┘              │└─┘└─┘└─┘│
+| 边界瞬间 180 req         └─────────┘
+                            ↓ 突发可取多个令牌
+漏桶：
+  →→→ ═══ →→→              滑动窗口：
+  入水   出水恒定             |← 60s 窗口 →|
+                           ┌─┬─┬─┬─┬─┬─┐  统计窗口内请求数
+                           │ │ │ │ │ │ │  随时间移动，更平滑
+                           └─┴─┴─┴─┴─┴─┘
+```
 
 ### 令牌桶实现
 
 ```java
 public class TokenBucket {
-    private final long capacity;
-    private final double refillRate;  // 令牌/秒
-    private double tokens;
-    private long lastRefill;
+    private final long capacity;       // 最大令牌数
+    private final double refillRate;   // 令牌/秒
+    private double tokens;             // 当前令牌数
+    private long lastRefill;           // 上次填充时间
 
     public synchronized boolean tryAcquire() {
-        refill();  // 按时间填充令牌
+        refill();
         if (tokens >= 1) { tokens--; return true; }
         return false;
+    }
+
+    private void refill() {
+        long now = System.currentTimeMillis();
+        double newTokens = (now - lastRefill) / 1000.0 * refillRate;
+        tokens = Math.min(capacity, tokens + newTokens);
+        lastRefill = now;
     }
 }
 ```
 
 ### 分布式限流（Redis + Lua）
 
+单机限流在分布式场景不够，需要用集中式限流：
+
 ```lua
--- 滑动窗口
-local key = KEYS[1]
-local now = redis.call('TIME')[1]
-redis.call('ZREMRANGEBYSCORE', key, 0, now - ARGV[1])
-if redis.call('ZCARD', key) < tonumber(ARGV[2]) then
-    redis.call('ZADD', key, now, now .. '-' .. math.random())
-    return 1
+-- 滑动窗口限流 Lua 脚本
+local key = KEYS[1]                                    -- 限流 key
+local window = tonumber(ARGV[1])                       -- 窗口大小（秒）
+local limit = tonumber(ARGV[2])                        -- 窗口内限制次数
+local now = tonumber(redis.call('TIME')[1])             -- 当前秒级时间戳
+local cutoff = now - window
+
+-- 移除窗口外的记录
+redis.call('ZREMRANGEBYSCORE', key, 0, cutoff)
+
+-- 获取当前窗口内请求数
+local count = redis.call('ZCARD', key)
+
+if count < limit then
+    -- 用随机后缀避免同一秒内多请求分值相同
+    redis.call('ZADD', key, now, now .. '-' .. math.random(100000))
+    redis.call('EXPIRE', key, window + 1)
+    return 1  -- 放行
+else
+    return 0  -- 拒绝
 end
-return 0
 ```
+
+**注意**：Redis 限流需要每次请求都访问 Redis，高并发时可先用本地令牌桶粗筛，再走 Redis 精确控制。
+
+### 工业级限流组件
+
+| 组件 | 类型 | 特点 |
+|------|------|------|
+| **Sentinel** | 分布式 | 阿里开源，支持流控/熔断/系统保护，控制台实时监控 |
+| **Guava RateLimiter** | 单机 | 平滑突发限流（SmoothBursty）/ 预热限流（WarmUp） |
+| **Resilience4j** | 单机 | 轻量级，RateLimiter + CircuitBreaker + Retry |
+| **Nginx limit_req** | 网关 | 漏桶实现，接入层第一道防线 |
+
+### 多层限流架构
+
+```
+用户请求
+  │
+  ▼
+┌─────────────────────┐
+│ 1. Nginx 网关限流     │ ← IP 级别（漏桶），防恶意刷
+├─────────────────────┤
+│ 2. API Gateway 限流  │ ← 接口级别（令牌桶），按 API 限流
+├─────────────────────┤
+│ 3. 应用 Sentinel 限流 │ ← 方法级别，热点参数限流
+├─────────────────────┤
+│ 4. 业务逻辑处理       │
+└─────────────────────┘
+```
+
+### 限流 vs 熔断 vs 降级
+
+| 手段 | 触发条件 | 行为 | 目的 |
+|------|------|------|------|
+| **限流** | 超过设定阈值 | 拒绝多余请求 | 保护自身不被冲垮 |
+| **熔断** | 调用下游失败率过高 | 快速失败，不再调用 | 防止级联故障（不雪崩） |
+| **降级** | 系统压力大/依赖不可用 | 返回兜底结果 | 有损提供服务 |
+
+> 三者常配合使用：限流在前 → 熔断在调用链 → 降级做最后兜底。
