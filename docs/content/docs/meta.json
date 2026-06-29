@@ -1,3 +1,4 @@
 {
-  "pages": ["java", "architecture", "middleware", "ai", "tools"]
+  "title": "个人学习",
+  "pages": ["index", "java", "architecture", "middleware", "ai", "tools"]
 }
