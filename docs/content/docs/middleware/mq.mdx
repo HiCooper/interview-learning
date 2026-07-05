@@ -21,6 +21,8 @@ description: 消息队列应用场景、消息可靠性保证、幂等性、顺�
 - **分布式事务**：本地事务+消息表（可靠消息模式）→ RocketMQ 事务消息（Half → 本地事务 → Commit/Rollback → 回查）
 - **消息堆积**：扩容消费者（优先）→ 临时新 Topic 扩容分区 → 降级 → 批量消费 → 跳过陈旧消息
 - **顺序保证**：同一 key → 同一分区 = 分区内有序，全局顺序消耗吞吐
+- **生产确认等级**：acks=0（发完不管）→ acks=1（Leader 确认）→ acks=all（ISR 全确认）→ 幂等 Producer（去重）→ 事务消息（原子性）
+- **分区扩容**：提前预留（最佳）→ 无序直接扩 → 有序则双写迁移（新旧 Topic 并行验证后切流）
 ## 架构核心
 
 - **异步解耦模型**：Producer → Broker → Consumer
@@ -183,6 +185,140 @@ consumer.poll(Duration.ofMillis(1000)).forEach(record -> {
 
 > **预防优先于应急**：生产前做好容量评估，消费端预留 2x 峰值处理能力。
 
+### Q5：生产者如何确保消息已成功发送到 Broker？
+
+**核心矛盾**：Producer 看到的只是"响应"，不是"事实"。网络超时时 Producer 无法区分"消息没到"和"消息到了但 ACK 丢了"。
+
+**Kafka acks 参数（控制"什么叫发送成功"）**：
+
+| acks | 含义 | 可靠性 | 性能 |
+|------|------|--------|------|
+| `acks=0` | Producer 不等确认，发完即返回 | ❌ 消息可能丢了都不知道 | 最快 |
+| `acks=1` | Leader 写入 Page Cache 即确认 | ⚠️ Leader 挂了未同步则丢 | 较快 |
+| `acks=all` / `-1` | 所有 ISR 副本确认后才返回 | ✅ 只要还有一个 ISR 活着就不丢 | 较慢 |
+
+```properties
+# 生产推荐配置
+acks=all
+min.insync.replicas=2      # 最少 2 个 ISR 确认，防止 Leader 单点退化
+enable.idempotence=true     # 幂等 Producer，解决重试导致的重复
+```
+
+**RocketMQ 发送结果**：
+
+```java
+SendResult result = producer.send(msg);
+switch (result.getSendStatus()) {
+    case SEND_OK:              // Broker 确认写入成功
+    case FLUSH_DISK_TIMEOUT:   // 写入成功但刷盘超时（Broker 会继续刷，不丢）
+    case FLUSH_SLAVE_TIMEOUT:  // 主节点成功，从同步超时（主挂可能丢）
+}
+```
+
+RocketMQ 的两个维度配置：
+- **刷盘**：`SYNC_FLUSH`（同步刷盘 ~100 TPS）vs `ASYNC_FLUSH`（异步 ~10w TPS）
+- **复制**：`SYNC_MASTER`（等 Slave 确认）vs `ASYNC_MASTER`（不等）
+
+**超时重试与幂等**（网络超时是最棘手的问题）：
+
+```
+Producer 超时，无法区分：
+  情况 1：消息没到 Broker → 重试没问题
+  情况 2：消息到了，ACK 丢了 → 重试会重复！
+
+Kafka 幂等 Producer 解决方案：
+  Broker 给每个 Producer 分配 PID，每条消息带 Sequence Number
+  Broker 检测到重复 seq → 丢弃，返回 ACK
+  → Producer 放心重试，不会重复
+
+兜底：业务消息体带唯一 msgId，Consumer 侧 Redis/DB 去重
+```
+
+**可靠性等级总结**：
+
+```
+Level 0: acks=0           → 发完不管，适合日志/埋点
+Level 1: acks=1           → Leader 确认
+Level 2: acks=all + ISR≥2 → 多数副本确认（生产标配）
+Level 3: + 幂等 Producer   → 解决重试重复（核心业务）
+Level 4: + 事务消息        → 本地事务+消息原子性（支付/库存）
+```
+
+### Q6：MQ 分区不够如何扩容？
+
+**核心矛盾**：分区数变了 → `hash(key) % N` 的结果变了 → 同一个 key 的消息可能散到不同分区 → **有序性被破坏**。
+
+```
+扩容前（3 分区）：
+  key="order_1001" → hash % 3 = 0 → P0  [创建][支付][发货] ← 有序
+
+扩容后（5 分区）：
+  key="order_1001" → hash % 5 = 2 → P2  [创建][支付]  ← 老消息
+                                     P3  [发货]      ← 新消息！乱序！
+```
+
+**Kafka vs RocketMQ 的扩容能力**：
+
+| 操作 | Kafka | RocketMQ |
+|------|-------|----------|
+| 增加分区 | ✅ `--alter --partitions 10` | ✅ `updateTopic -w 8 -r 8` |
+| 减少分区 | ❌ 不支持 | ✅ 可以（Queue 只是索引） |
+
+> Kafka 不支持减少分区 — 因为减少意味着删除数据。RocketMQ 的 Queue 是 CommitLog 的索引，增减更灵活。
+
+**三种扩容场景**：
+
+```
+场景 A：消息不需要有序（日志、埋点、监控）
+  → 直接扩分区 + 增加 Consumer 实例
+  → 影响：rebalance 短暂中断（秒级），做好幂等即可
+
+场景 B：需要按 Key 有序，可以短暂停服
+  → 1. 停止 Producer
+  → 2. 等所有消息被消费完
+  → 3. 删除旧 Topic，建新 Topic（更多分区）
+  → 4. 重启 Producer 和 Consumer
+
+场景 C：需要按 Key 有序，不能停服 → 双写迁移
+```
+
+**双写迁移（零停机扩容）**：
+
+```mermaid
+sequenceDiagram
+    participant P as Producer
+    participant OldT as 旧 Topic (3 分区)
+    participant NewT as 新 Topic (10 分区)
+    participant OldCG as 旧 Consumer Group
+    participant NewCG as 新 Consumer Group (group.id=v2)
+
+    Note over P: Phase 1: 准备
+    P->>NewT: 创建新 Topic（10 分区）
+    Note over NewCG: 部署新 CG（独立 group.id）
+
+    Note over P: Phase 2: 双写并行
+    P->>OldT: 写入（同一条消息）
+    P->>NewT: 写入（同一条消息）
+    OldT->>OldCG: 正常消费（业务不受影响）
+    NewT->>NewCG: 独立验证消费
+
+    Note over P: Phase 3: 切流
+    P-->>OldT: 停止写入
+    OldCG->>OldCG: 消费完存量后下线
+    NewCG->>NewCG: 正式接管
+
+    Note over P: Phase 4: 清理
+    OldT->>OldT: 删除旧 Topic
+```
+
+**关键要点**：
+- **新 Consumer Group = 同代码 + 新 `group.id` + 独立部署实例**（作用是独立追踪 offset，独立验证）
+- **新 Topic = 从零开始以更多分区运行**，没有历史数据 hash 规则混乱的问题
+- **回滚**：任何阶段发现问题 → Producer 切回只写旧 Topic 即可（旧链路从未停过）
+- **最佳实践**：提前预留充足分区数（预估峰值 2x），避免临时扩容
+
+> 这是**零停机数据迁移**的通用模式 — 不动旧链路，新建新链路，并行验证，平滑切换。数据库分库分表扩容也是这个思路。
+
 ---
 
 ## 自测
@@ -198,3 +334,9 @@ consumer.poll(Duration.ofMillis(1000)).forEach(record -> {
 
 4. **线上消息大量堆积，你的排查和应急流程是什么？**
    <br/>→ 排查：先看消费端是否有异常日志/性能瓶颈 → 检查是否有 rebalance 风暴。应急：扩容消费者（最优先）→ 临时建新 Topic 扩容分区 → 非核心消息降级丢弃 → 批量消费提高吞吐。预防：消费端预留 2x 峰值处理能力。
+
+5. **Kafka acks=all 就绝对不丢消息吗？什么情况下仍然可能丢？**
+   <br/>→ acks=all 保证 ISR 全部确认，但如果 ISR 列表只剩 Leader 一个节点（其他副本挂了），acks=all 退化等同于 acks=1。配合 `min.insync.replicas=2` 可以防止。另外 Producer 超时重试如果没有开启幂等（`enable.idempotence=true`），可能产生重复——重复虽不是"丢失"，但业务层需要幂等消费。
+
+6. **分区不够需要扩容，但不能停服且消息需要按 Key 有序，你的方案是什么？**
+   <br/>→ 双写迁移：1) 创建新 Topic（更多分区）；2) Producer 同时写旧 Topic 和新 Topic；3) 新 Consumer Group（独立 group.id）从新 Topic 消费并验证；4) 确认无误后 Producer 切为只写新 Topic；5) 旧 Consumer Group 消费完存量后下线；6) 删除旧 Topic。核心：新旧链路并行运行，任何阶段可回滚（切回只写旧 Topic 即可）。
