@@ -12,6 +12,8 @@ description: 线程池、AQS、synchronized 与 ReentrantLock 对比分析
 - **虚拟线程**（Java 21）：轻量级（~KB），阻塞时自动释放平台线程，无需池化
 - **CompletableFuture**：异步编排，thenApply/thenAccept/exceptionally
 - **StampedLock**：乐观读 + 悲观读/写，比 ReadWriteLock 更高效
+- **线程通信**：volatile（标志位）→ wait/notify（等待通知）→ Lock+Condition（多条件精确唤醒）→ BlockingQueue/CountDownLatch/CyclicBarrier（高层工具）
+- **ThreadLocal**：数据存在 Thread 内部的 ThreadLocalMap，ThreadLocal 做 key（弱引用），开放地址法解决冲突，不调 remove() 即泄漏
 
 ---
 
@@ -162,7 +164,206 @@ flowchart LR
 
 ---
 
-## 五、现代并发编程
+## 五、线程间通信
+
+### 通信方式总览
+
+线程通信的核心是：一个线程如何感知另一个线程的状态变化、如何传递数据。Java 按抽象层级提供了多层机制：
+
+```mermaid
+flowchart TB
+    subgraph Layer1["基础层：共享内存"]
+        SM["volatile / 共享变量<br/>保证可见性，不保证原子性"]
+    end
+    subgraph Layer2["协作层：等待-通知"]
+        WN["synchronized + wait/notify<br/>Object 内置 monitor 的条件队列"]
+    end
+    subgraph Layer3["高级层：显式锁 + 多条件"]
+        LC["Lock + Condition<br/>多条件队列，精确唤醒"]
+    end
+    subgraph Layer4["工具层：JUC 并发工具"]
+        JUC["BlockingQueue / CountDownLatch<br/>CyclicBarrier / Semaphore / Exchanger<br/>生产开发首选"]
+    end
+    Layer1 --> Layer2 --> Layer3 --> Layer4
+```
+
+### volatile — 标志位通信
+
+最轻量的通信机制，只保证可见性和禁止重排序，**不保证原子性**：
+
+```java
+volatile boolean ready = false;
+
+// 线程 A
+void writer() { ready = true; }  // 写入立即刷新到主内存
+
+// 线程 B
+void reader() {
+    while (!ready) {}   // 每次读取从主内存拉取
+    System.out.println("done");
+}
+```
+
+适用：状态标志位、单写多读的配置值。`i++` 这类复合操作仍需锁保护。
+
+### wait() / notify() / notifyAll()
+
+基于内置锁的等待-通知机制，Java 最经典的通信方式：
+
+```java
+class MessageQueue {
+    private String message;
+    private boolean empty = true;
+
+    public synchronized String take() {
+        while (empty) {              // while 而非 if，防虚假唤醒
+            wait();                   // 释放锁，进入等待队列
+        }
+        empty = true;
+        notifyAll();                  // 唤醒等待的生产者
+        return message;
+    }
+
+    public synchronized void put(String msg) {
+        while (!empty) { wait(); }
+        message = msg;
+        empty = false;
+        notifyAll();                  // 唤醒等待的消费者
+    }
+}
+```
+
+```mermaid
+sequenceDiagram
+    participant Consumer as 消费者（T1）
+    participant Monitor as 锁 + 等待集
+    participant Producer as 生产者（T2）
+
+    Consumer->>Monitor: synchronized 获取锁
+    Consumer->>Consumer: 条件不满足
+    Consumer->>Monitor: wait() 释放锁，T1 进入等待
+    Producer->>Monitor: synchronized 获取锁
+    Producer->>Producer: 生产数据
+    Producer->>Monitor: notifyAll() 唤醒 T1
+    Producer->>Monitor: 退出同步块，释放锁
+    Monitor->>Consumer: T1 重新获取锁，从 wait() 返回
+```
+
+**关键规则**：
+
+| 规则 | 说明 |
+|------|------|
+| 必须在 `synchronized` 内调用 | 否则抛 `IllegalMonitorStateException` |
+| **用 `while` 而非 `if`** | 防止虚假唤醒（spurious wakeup） |
+| `wait()` 释放锁 | `sleep()` 不释放锁，这是关键区别 |
+| `notify()` 不立即释放锁 | 退出同步块后才释放 |
+| `notify()` 随机唤醒一个 | `notifyAll()` 唤醒全部等待线程 |
+
+### Lock + Condition — 多条件精确唤醒
+
+`synchronized + wait/notify` 的升级版，支持**多条件队列**，精确唤醒目标线程：
+
+```java
+class BoundedBuffer {
+    final Lock lock = new ReentrantLock();
+    final Condition notFull  = lock.newCondition();   // 生产者等待队列
+    final Condition notEmpty = lock.newCondition();   // 消费者等待队列
+    final Object[] items = new Object[100];
+    int putIdx, takeIdx, count;
+
+    public void put(Object x) throws InterruptedException {
+        lock.lock();
+        try {
+            while (count == items.length) notFull.await();
+            items[putIdx] = x;
+            if (++putIdx == items.length) putIdx = 0;
+            ++count;
+            notEmpty.signal();  // 精确唤醒一个消费者
+        } finally { lock.unlock(); }
+    }
+
+    public Object take() throws InterruptedException {
+        lock.lock();
+        try {
+            while (count == 0) notEmpty.await();
+            Object x = items[takeIdx];
+            if (++takeIdx == items.length) takeIdx = 0;
+            --count;
+            notFull.signal();   // 精确唤醒一个生产者
+            return x;
+        } finally { lock.unlock(); }
+    }
+}
+```
+
+| 对比 | synchronized + wait/notify | Lock + Condition |
+|------|---------------------------|-----------------|
+| 条件队列数 | 每个对象只有 1 个等待集 | 一个 Lock 可创建多个 Condition |
+| 唤醒精度 | `notify()` 随机唤醒 | `signal()` 精确唤醒指定队列 |
+| 中断 | 支持 | `await()` 响应中断；`awaitUninterruptibly()` 不响应 |
+| 超时 | `wait(ms)` | `await(ms, TimeUnit)` |
+| 适用场景 | 简单等待-通知 | 有界缓冲、复杂状态依赖 |
+
+### JUC 工具类（生产开发首选）
+
+底层均基于 **AQS** 实现，是实际开发中最常用的通信方式：
+
+| 工具 | 核心方法 | 通信模式 | 适用场景 |
+|------|----------|----------|----------|
+| **BlockingQueue** | `put()` / `take()` | 生产者-消费者 | 线程池任务队列、消息队列 |
+| **CountDownLatch** | `countDown()` / `await()` | 一等多：倒数门闩 | 主线程等待所有子任务完成（一次性） |
+| **CyclicBarrier** | `await()` | 多等互：齐步走 | 多线程分阶段计算（可循环复用） |
+| **Semaphore** | `acquire()` / `release()` | 信号量，限流 | 连接池、限流器 |
+| **Exchanger** | `exchange(V x)` | 两线程交换数据 | 双向管道 |
+| **Phaser** | `arrive()` / `awaitAdvance()` | 多阶段同步 | 比 CyclicBarrier 更灵活，支持动态参与方 |
+
+#### 典型用法
+
+```java
+// CountDownLatch：主线程等待 3 个子任务
+CountDownLatch latch = new CountDownLatch(3);
+for (int i = 0; i < 3; i++)
+    new Thread(() -> { doWork(); latch.countDown(); }).start();
+latch.await();  // 阻塞直到计数归零
+
+// CyclicBarrier：3 线程互相等待，分阶段同行
+CyclicBarrier barrier = new CyclicBarrier(3, () -> log("全部就绪"));
+for (int i = 0; i < 3; i++) {
+    new Thread(() -> {
+        doPhase1(); barrier.await();  // 等其他人完成 Phase1
+        doPhase2(); barrier.await();  // 等其他人完成 Phase2，可复用！
+    }).start();
+}
+
+// BlockingQueue：生产者-消费者，零手工同步
+BlockingQueue<Task> queue = new LinkedBlockingQueue<>(100);
+// 生产者：队列满则自动阻塞
+queue.put(task);
+// 消费者：队列空则自动阻塞
+Task t = queue.take();
+```
+
+### 管道流（Piped Streams）
+
+`PipedInputStream` / `PipedOutputStream` 可在两线程间传输原始字节。用法老旧，生产环境几乎不用。
+
+### 决策速查
+
+```
+需要通信 → 什么模式？
+├── 简单状态标志位 → volatile
+├── 等待特定条件 → synchronized + wait/notify
+├── 多条件精确唤醒 → Lock + Condition
+├── 一对一传递数据 → BlockingQueue
+├── 等待所有子任务完成 → CountDownLatch
+├── 多线程分阶段同步 → CyclicBarrier / Phaser
+├── 两线程交换数据 → Exchanger
+└── 限流控制 → Semaphore
+```
+
+---
+
+## 六、现代并发编程
 
 ### 虚拟线程（Virtual Threads / Java 21+）
 
@@ -211,6 +412,192 @@ if (!lock.validate(stamp)) {
 
 ---
 
+## 七、ThreadLocal
+
+### 核心思想
+
+> ThreadLocal 本身不存数据。数据存在 **Thread 对象内部**的 `ThreadLocalMap` 里，ThreadLocal 实例只是用来做 key。
+
+```mermaid
+flowchart TB
+    subgraph T1["Thread A"]
+        TL1["threadLocals"]
+    end
+    subgraph T2["Thread B"]
+        TL2["threadLocals"]
+    end
+    TL1 --> Map1["ThreadLocalMap<br/>Entry[] table"]
+    TL2 --> Map2["ThreadLocalMap<br/>Entry[] table"]
+    Map1 --> E1["Entry: TL#1 → 'value-A'"]
+    Map2 --> E2["Entry: TL#1 → 'value-B'"]
+    E1 -..-> TL["同一个 ThreadLocal 实例"]
+    E2 -..-> TL
+```
+
+### 数据结构
+
+**ThreadLocalMap 内部结构**：
+
+```
+ThreadLocalMap
+┌──────────────────────────────────────────────┐
+│ Entry[] table   初始容量 16，2 的幂           │
+│ int size                                      │
+│ int threshold   扩容阈值 = len * 2/3          │
+│                                               │
+│ Entry 继承 WeakReference<ThreadLocal<?>>      │
+│ ┌───────────────────────────────────┐         │
+│ │ referent → ThreadLocal（弱引用）   │         │
+│ │ value    → 实际数据（强引用）       │         │
+│ └───────────────────────────────────┘         │
+└──────────────────────────────────────────────┘
+```
+
+Entry 的 key 是弱引用、value 是强引用。ThreadLocal 对象没有外部强引用时会被 GC，但 **value 不会被自动回收**——这就是内存泄漏的根源。
+
+### 和 HashMap 的关键差异
+
+| | HashMap | ThreadLocalMap |
+|------|---------|----------------|
+| 数据归属 | Map 对象自身 | **Thread 对象内部** |
+| Key 类型 | 任意对象（强引用） | ThreadLocal（**弱引用**） |
+| 冲突解决 | 链表 + 红黑树 | **开放地址法**（线性探测） |
+| 扩容阈值 | 0.75 | **2/3** |
+| 清理机制 | 无 | 惰性清理过期 Entry（key==null） |
+
+### `tl.set("hello")` 源码执行流程
+
+```java
+// 入口：ThreadLocal.set()
+public void set(T value) {
+    Thread t = Thread.currentThread();       // ① 拿当前线程
+    ThreadLocalMap map = getMap(t);          // ② = t.threadLocals
+    if (map != null)
+        map.set(this, value);                // ③ Map 已存在 → 插入
+    else
+        createMap(t, value);                 // ④ Map 不存在 → 创建
+}
+
+// ThreadLocalMap(ThreadLocal<?> firstKey, Object firstValue)
+// 首次创建，直接放入第一个 Entry
+ThreadLocalMap(ThreadLocal<?> firstKey, Object firstValue) {
+    table = new Entry[INITIAL_CAPACITY];     // 初始容量 16
+    int i = firstKey.threadLocalHashCode & 15;
+    table[i] = new Entry(firstKey, firstValue);
+    size = 1;
+    setThreshold(INITIAL_CAPACITY);          // threshold = 16 * 2/3 = 10
+}
+```
+
+**Map 已存在时 — `map.set(this, value)`** 的核心逻辑：
+
+```java
+private void set(ThreadLocal<?> key, Object value) {
+    Entry[] tab = table;
+    int i = key.threadLocalHashCode & (tab.length - 1);  // 计算起始槽位
+
+    for (Entry e = tab[i]; e != null; e = tab[i = nextIndex(i, len)]) {
+        ThreadLocal<?> k = e.get();
+        if (k == key) { e.value = value; return; }        // 替换已有
+        if (k == null) { replaceStaleEntry(key, value, i); return; }  // 复用过期槽位
+    }
+
+    tab[i] = new Entry(key, value);                       // 遇到空位，插入
+    if (!cleanSomeSlots(i, ++size) && size >= threshold)  // 清理 + 必要时扩容
+        rehash();
+}
+```
+
+### 线性探测
+
+ThreadLocalMap 用开放地址法，而非链表。冲突时向后线性查找：
+
+```java
+// hash → index，被占 → index+1 → 继续 +1，直到找到空位
+int i = key.threadLocalHashCode & (table.length - 1);
+while (table[i] != null) {
+    if (table[i].get() == key) return table[i];
+    i = (i + 1) % table.length;
+}
+```
+
+**为什么不用链表？** ThreadLocalMap 的 key 随时可能被 GC 变成 null，链表中过期节点需要断链重排，比数组中直接替换复杂；加之中间件中 ThreadLocal 数量有限，数组效率更高。
+
+### threadLocalHashCode 的生成规则
+
+每创建一个 ThreadLocal 实例，hashCode 递增黄金分割数（斐波那契哈希）：
+
+```java
+private static AtomicInteger nextHashCode = new AtomicInteger();
+private static final int HASH_INCREMENT = 0x61c88647;
+
+private static int nextHashCode() {
+    return nextHashCode.getAndAdd(HASH_INCREMENT);
+}
+```
+
+`0x61c88647` 使得不同 ThreadLocal 在 2^n 数组中均匀散布，最大程度减少冲突。
+
+### 过期 Entry 的惰性清理
+
+ThreadLocalMap **不依赖后台线程**，而是在 get/set/remove 时顺带清理 key==null 的 Entry：
+
+| 清理方法 | 触发时机 | 范围 |
+|----------|----------|------|
+| `expungeStaleEntry(int)` | get/set 遇到过期 Entry 时 | 从指定位置开始，连续段内全清 |
+| `cleanSomeSlots(int, int)` | set 插入新 Entry 后 | `O(log n)` 次试探性扫描 |
+| `expungeStaleEntries()` | rehash / resize | 全量清理 |
+
+### 扩容流程
+
+```
+set 后 size > threshold（len * 2/3）
+  → cleanSomeSlots() 试探性清理
+    → 没清掉且仍超阈值
+      → rehash()
+        → expungeStaleEntries() 全量清理
+        → size >= threshold * 3/4（≈ len/2）? → resize() 两倍扩容
+```
+
+### 标准使用范式
+
+```java
+// 创建（推荐 withInitial 提供初始值）
+ThreadLocal<String> context = ThreadLocal.withInitial(() -> "default");
+
+// 使用
+void handleRequest() {
+    context.set("traceId-" + UUID.randomUUID());
+    try {
+        doWork();  // 链路中任意位置 get() 即可拿到
+    } finally {
+        context.remove();  // 必须！线程池场景防止脏读和内存泄漏
+    }
+}
+```
+
+### 子线程继承
+
+| 方案 | 行为 | 线程池可用？ |
+|------|------|:---:|
+| `ThreadLocal` | 子线程拿不到父线程值 | ✗ |
+| `InheritableThreadLocal` | 子线程创建时拷贝父值 | ✗（拷贝仅 new Thread 时触发） |
+| 阿里 **TTL** | `TtlRunnable` 在提交时捕获、执行前回放 | ✓ |
+
+### ThreadLocal 内存泄漏的根因
+
+```
+Thread → ThreadLocalMap → Entry[] → Entry
+                                       ├─ referent → ThreadLocal (弱引用，GC 可回收)
+                                       └─ value    → 对象 (强引用，Thread 存活则无法回收)
+```
+
+Key 被 GC 后，value 仍然被 Thread → ThreadLocalMap → Entry → value 这条强引用链可达。只要线程还活着，value 就回收不了。**线程池的线程长期存活，泄漏会持续累积**。
+
+> 不调 `remove()`，就只能依赖 get/set 的惰性清理碰运气。
+
+---
+
 ## 自测
 
 1. **线程池提交任务后，如果当前线程数 = corePoolSize、队列未满，任务会走哪条路径？**
@@ -227,3 +614,6 @@ if (!lock.validate(stamp)) {
 
 5. **虚拟线程适合什么场景？为什么不建议在虚拟线程中使用 synchronized 块或 `Thread.sleep()` 长时间阻塞？**
    <br/>→ 适合 IO 密集型高并发场景。synchronized 会 pin 住底层平台线程（虚拟线程无法 unmount），`Thread.sleep()` 在虚拟线程中会被自动处理（非阻塞），真正需要避免的是长时间持有 monitor 锁。
+
+6. **ThreadLocal 为什么可能导致内存泄漏？Entry 的 key 用弱引用能解决问题吗？**
+   <br/>→ 根因：Thread → ThreadLocalMap → Entry → value 强引用链，key（弱引用）被 GC 后 value 仍然存在。弱引用只解决了 ThreadLocal 对象本身不被 Map 阻止回收，但 value 还是强引用，线程不死就回收不了。`remove()` 是唯一可靠手段——它会同时清除 key 和 value，并清理过期槽位。

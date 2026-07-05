@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@0.0.69",
+        "--extension",
+        "--executable-path",
+        "/home/hicooper/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome",
+        "--viewport-size",
+        "1280x800"
+      ]
+    }
+  }
+}

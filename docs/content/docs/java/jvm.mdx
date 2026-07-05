@@ -96,6 +96,25 @@ flowchart TB
 | ~~CMS~~ | 老年代 | 标记-清除 | ~~JDK14 标记废弃，JDK18 移除~~ |
 | **G1** | 全堆 | 标记-整理 | **JDK9+ 默认**，无碎片 |
 
+### JDK 8 vs JDK 11 默认收集器
+
+JDK 9 起默认 GC 从 Parallel 切换为 G1（JEP 248），JDK 11 作为 LTS 继承该默认配置。
+
+| 维度 | Parallel GC（JDK 8 默认） | G1 GC（JDK 11 默认） |
+|------|--------------------------|----------------------|
+| **核心思想** | 吞吐量优先，大批量回收 | 低延迟优先，增量回收 |
+| **堆结构** | 连续年轻代（Eden + 2 Survivor）+ 老年代 | 大量等大小 Region（约 2048 个），每个 Region 可扮演 Eden / Survivor / Old / Humongous |
+| **年轻代回收** | 标记-复制，STW | 标记-复制，STW（仅处理部分 Region） |
+| **老年代回收** | 标记-整理，全堆 STW，耗时长 | 并发标记 + 增量式回收，大部分工作与应用线程并发 |
+| **停顿时间** | 随堆增长线性增加，大堆可能秒级 | 可指定目标（`-XX:MaxGCPauseMillis`，默认 200ms），自动调控回收规模 |
+| **吞吐量** | 更高（STW 虽长，但总 GC 时间占比小） | 略低（并发阶段消耗 CPU，换更短停顿） |
+| **内存碎片** | 标记-整理，老年代无碎片 | 混合回收整理 Region，Remembered Sets 管理跨 Region 引用 |
+| **适用场景** | 批处理、后台计算、停顿不敏感 | 大堆（>4GB）、要求低延迟的在线服务（Web 应用、API） |
+
+**原因**：随着服务器内存越来越大（几十 G 甚至上百 G），Parallel GC 的 Full GC 停顿可达数秒，在线服务不可接受。G1 将停顿控制在 200ms 量级。
+
+> **注意**：物理内存 < 1792MB 时 JVM 自动回退到 **Serial GC**，与默认配置无关。手动指定 `-XX:+UseParallelGC` 或 `-XX:+UseG1GC` 时以显式参数为准。
+
 ### 现代低延迟收集器
 
 | 收集器 | JDK | 目标 | 特点 |
@@ -110,6 +129,142 @@ flowchart TB
 **G1**：初始标记 → 并发标记 → 最终标记 → 筛选回收
 
 **ZGC**：几乎所有阶段并发执行，只有根扫描等极少数阶段需要短暂 STW。标记阶段使用染色指针（Colored Pointers）技术。
+
+### G1 标记数据结构
+
+G1 并发标记使用 **SATB（Snapshot-At-The-Beginning）** 算法，涉及以下核心数据结构：
+
+#### 标记位图（Marking Bitmap）
+
+每个 Region 维护**两个位图**，每个 bit 对应堆中一个对象起始地址（通常按 8 字节对齐）：
+
+| 位图 | 作用 |
+|------|------|
+| **Next Bitmap** | 当前标记周期正在构建的位图，标记过程中不断更新 |
+| **Previous Bitmap** | 上次标记周期的稳定快照，代表上一个快照中存活的对象集合 |
+
+**用两个位图的原因**：并发标记期间新对象仍在分配——这些对象不能等标记结束再处理。两个位图交替使用，避免标记周期互相干扰。
+
+```mermaid
+flowchart TB
+    subgraph Cycle1["第 N 轮标记"]
+        direction LR
+        N1["🔨 Next Bitmap<br/>当前正在构建"]
+        N2["✓ Previous Bitmap<br/>上轮结果（只读参考）"]
+    end
+    subgraph Cycle2["第 N+1 轮标记"]
+        direction LR
+        N3["🔨 Next Bitmap<br/>当前正在构建"]
+        N4["✓ Previous Bitmap<br/>来自第 N 轮的 Next"]
+    end
+    Cycle1 -->|"标记完成<br/>角色互换"| Cycle2
+    N1 -.->|"变为"| N4
+    N2 -.->|"被复用"| N3
+```
+
+> 位图的优势：一个 bit 就能精确关联到一个对象起始位置，而 Remembered Set 只能近似记录卡表中的位置。
+
+#### SATB 队列与缓冲区
+
+G1 的写屏障（Write Barrier）在**指针被覆盖之前**，将旧值记录到线程本地 SATB 缓冲区：
+
+```java
+// 伪代码：SATB 写屏障
+void writeBarrier(oop* field, oop newValue) {
+    oop oldValue = *field;          // 先读取旧值
+    if (oldValue != null) {
+        satbBuffer.enqueue(oldValue); // 旧值入队，防止并发漏标
+    }
+    *field = newValue;              // 再真正写入
+}
+```
+
+各线程的本地 SATB 队列满了之后转移到全局队列集合。并发标记线程**定期处理**这些队列中的指针。
+
+> **为什么需要 SATB？**
+
+三色标记中，遍历对象时将其标记为三色之一：**白色**（未访问）、**灰色**（已访问，子引用未扫描完）、**黑色**（子引用全部扫描完成）。
+
+并发场景下可能出现漏标——条件：黑色对象新增了指向白色对象的引用，且灰色对象对它的引用被删除：
+
+```mermaid
+flowchart TB
+    subgraph Stage1["① 并发标记中"]
+        A["A（灰色）<br/>尚未扫描完字段"]
+        B1["B（白色）<br/>A 指向 B"]
+        C["C（黑色）<br/>已扫描完成"]
+        A -->|"引用"| B1
+    end
+    subgraph Stage2["② 用户线程并发修改"]
+        direction LR
+        DEL["❌ 删除 A → B"]
+        ADD["✅ 新增 C → B"]
+    end
+    subgraph Stage3["③ 无 SATB：B 漏标！"]
+        LOST["C 已黑色不再扫描<br/>B 存活却被判为垃圾"]
+    end
+    subgraph Stage4["④ SATB 保护"]
+        SAFE["📝 删除 A→B 时<br/>写屏障记录 B 到 SATB 队列<br/>标记线程重新处理 → 安全"]
+    end
+    Stage1 --> Stage2
+    Stage2 --> Stage3
+    Stage2 --> Stage4
+```
+
+SATB 在引用**被删除时**快照记录旧值（逻辑快照），即使该对象后续仅被黑色对象引用，也能通过 SATB 队列被标记线程重新访问到。
+
+#### TAMS（Top At Mark Start）指针
+
+每个 Region 有两个 TAMS 指针，记录并发标记开始时的分配位置：
+
+```
+Region 布局：
+┌──────────────────────────────────────────────┐
+│  上次标记存活  │  本次标记后新分配（隐式存活）│
+│◄─prev TAMS    │◄─next TAMS                  │
+│  本次标记中    │  默认存活，不参与本轮标记    │
+└──────────────────────────────────────────────┘
+```
+
+- **TAMS 以下**：标记开始时已存在，需通过标记确定存活
+- **TAMS 以上**：标记开始后新分配，**默认视为存活**，不参与本轮标记
+
+#### Remembered Set（RSet）
+
+虽然不是标记对象本身的结构，但它是 G1 增量回收的关键。每个 Region 维护一个 RSet，记录**其他 Region 指向本 Region 的引用**：
+
+```mermaid
+flowchart LR
+    subgraph Heap["G1 堆（部分 Region）"]
+        direction TB
+        subgraph RA["Region A（待回收）"]
+            OA["对象 a"]
+        end
+        subgraph RB["Region B"]
+            OB["对象 b.ref = a"]
+        end
+        subgraph RC["Region C"]
+            OC["对象 c.ref = a"]
+        end
+    end
+    OB -->|"引用"| OA
+    OC -->|"引用"| OA
+    Heap --> RSetBox["RSet[A] = { Card(B, 0x120), Card(C, 0x200) }"]
+```
+
+内部使用 **哈希表**（Per-Region Table，PRT）实现，以"卡表索引"为键。回收 Region A 时只需查看 `RSet[A]` 就能知道哪些外部 Region 持有 A 内对象的引用，**无需全堆扫描**。
+
+#### 数据结构总览
+
+| 数据结构 | 作用 | 粒度 |
+|----------|------|------|
+| **Next Bitmap** | 当前标记周期的存活标记 | 每 bit → 一个对象起始地址 |
+| **Previous Bitmap** | 上次标记周期的稳定快照 | 每 bit → 一个对象起始地址 |
+| **SATB 队列** | 记录被覆盖的旧指针，防并发漏标 | 线程本地 + 全局共享 |
+| **TAMS 指针** | 区分标记前/后分配的对象 | 每 Region 两个（对应两个位图） |
+| **RSet** | 跨 Region 引用索引，避免全堆扫描 | 每 Region 一个，哈希表实现 |
+
+> **一句话记忆**：G1 用**位图（双缓冲）+ SATB 队列 + TAMS** 实现并发标记，用 **RSet（哈希表）** 实现增量回收。
 
 ---
 
