@@ -1,6 +1,6 @@
 ---
 title: Redis
-description: Redis 持久化机制、集群方案、淘汰策略与过期键删除
+description: Redis 持久化机制、集群方案、淘汰策略、过期键删除与热点榜单设计
 ---
 
 ## 概述
@@ -126,6 +126,102 @@ flowchart LR
 
 ---
 
+## 热点榜单设计
+
+面试中的高频场景题。核心挑战：**海量并发写入 + 实时排序 + 时间衰减**。本质是将 ZSET + HASH + Lua + Pipeline 组合起来解决一个具体业务问题。
+
+### 数据结构选型
+
+| 结构 | 用途 |
+|------|------|
+| **ZSET** | 核心排名存储，score = 热度分，member = item ID |
+| **HASH** | 存储 item 元数据（标题、URL、点赞/评论/分享计数等） |
+| **STRING** | 原子计数器（单维度场景可替代 HASH） |
+
+### 热度分公式
+
+```
+Score = (点赞 × 3 + 评论 × 5 + 分享 × 10) / (已过小时数 + 2)^1.5
+```
+
+> 核心思想：互动权重不同（分享 > 评论 > 点赞），分母用牛顿冷却定律做时间衰减。
+
+### Lua 原子更新
+
+将"递增计数 + 重算分数 + 更新排名"封装为一个 Lua 脚本，保证原子性，避免网络往返：
+
+```lua
+-- update_score.lua
+-- KEYS[1]: HASH key（存储计数）, KEYS[2]: ZSET key
+-- ARGV[1]: 行为类型, ARGV[2]: item ID, ARGV[3]: 重力因子
+local hash_key = KEYS[1]
+local zset_key = KEYS[2]
+
+redis.call('HINCRBY', hash_key, ARGV[1], 1)
+
+local counters = redis.call('HGETALL', hash_key)
+local likes    = tonumber(counters['like'] or 0)
+local comments = tonumber(counters['comment'] or 0)
+local shares   = tonumber(counters['share'] or 0)
+local created  = tonumber(counters['create_time'] or redis.call('TIME')[1])
+
+local hours = (redis.call('TIME')[1] - created) / 3600
+local score = (likes * 3 + comments * 5 + shares * 10) / math.pow(hours + 2, tonumber(ARGV[3]))
+
+redis.call('ZADD', zset_key, score, ARGV[2])
+return score
+```
+
+### 多级 ZSET 分层
+
+不要所有数据放一个 ZSET，按时间维度拆分，解决全量排序性能问题：
+
+| ZSET Key | 窗口 | 过期时间 | 用途 |
+|----------|------|:---:|------|
+| `hot:ranking:hour` | 最近 1 小时 | TTL 1h | 实时热度 |
+| `hot:ranking:day` | 最近 24 小时 | — | 日榜 |
+| `hot:ranking:week` | 最近 7 天 | — | 周榜 |
+
+写入时 Pipeline 同时写多个 ZSET；`hour` 级别设 TTL 让 Redis 自动清理。查询时 `ZREVRANGE` 按 score 降序取 Top N：
+
+```java
+// 取日榜 Top 100
+Set<Tuple> top = jedis.zrevrangeWithScores("hot:ranking:day", 0, 99);
+```
+
+### 高并发写入优化
+
+```mermaid
+flowchart LR
+    Users["用户行为<br/>(点赞/评论/分享)"] --> GW["API Gateway"]
+    GW --> MQ["Kafka / 消息队列<br/>削峰填谷"]
+    MQ --> Consumer["批量消费<br/>200ms 窗口聚合"]
+    Consumer -->|"Pipeline + Lua"| Redis["Redis<br/>ZSET + HASH"]
+    Redis -->|"ZREVRANGE"| App["榜单服务<br/>返回 Top N"]
+```
+
+两个关键手段：
+
+1. **MQ 异步解耦** — 用户行为先入 MQ，批量消费（200ms 窗口聚合），将 10 万 QPS 写入降为 ~500 batch/s
+2. **Pipeline 批量写** — 一次网络往返提交多条命令，减少 RTT 开销
+
+### 上限裁剪 & 兜底
+
+- **ZREMRANGEBYRANK** 保留前 5000，防止 ZSET 无限增长
+- **定时任务**计算 Top 100 存入本地缓存（Caffeine），Redis 故障时兜底
+- **哨兵/集群**保证高可用，读写分离
+
+### 面试回答层次
+
+| 层次 | 要点 |
+|------|------|
+| **基础** | ZSET(ZADD/ZREVRANGE) + HASH 选型，复杂度 O(log N) |
+| **进阶** | Lua 原子化 + Pipeline 批量 + 多时间维度分层 ZSET |
+| **高阶** | MQ 异步削峰、时间衰减算法（牛顿冷却）、ZSET 底层跳表结构 |
+| **深度** | Redis Cluster 跨 slot 问题、热点 Key 多级缓存、本地缓存降级 |
+
+---
+
 ## 自测
 
 1. **RDB 和 AOF 的核心取舍是什么？生产环境通常如何配置？**
@@ -139,3 +235,9 @@ flowchart LR
 
 4. **Redis 过期键的三种删除策略如何配合工作？**
    <br/>→ 定时随机检查（主动清理，每次随机抽一批 key 检查过期）→ 惰性删除（访问 key 时检查，节省 CPU 但可能有"过期垃圾"堆积）→ maxmemory 淘汰（内存不足时强制扫描删除）。三者互补：定时保证大部分过期 key 被清理，惰性兜底访问场景，淘汰策略兜底内存压力。
+
+5. **热点榜单为什么用 ZSET 而不是其他数据结构？写入流程如何保证原子性？**
+   <br/>→ ZSET 底层是跳表，ZADD 和 ZREVRANGE 都是 O(log N)，天然适合排名场景。HASH 存元数据，STRING 做简单计数。原子性通过 Lua 脚本保证：将"递增计数 → 重算分数 → ZADD 更新排名"封装在一次 Redis 执行中，避免网络往返带来的竞态。
+
+6. **高并发场景下热点榜单的写入瓶颈如何解决？**
+   <br/>→ 三个手段：（1）MQ 异步削峰，用户行为先入消息队列，批量消费后 Pipeline 写 Redis；（2）多级 ZSET 按时间分层（hour/day/week），避免单个 ZSET 过大；（3）ZREMRANGEBYRANK 定期裁剪保留前 N 条，控制内存。极端场景还可将热点 item 的计数拆到多个 slot 分散写入压力。
