@@ -158,6 +158,37 @@ sequenceDiagram
     C->>C: 5. 幂等消费
 ```
 
+**事务消息流程图解**：
+
+```
+                      ┌──────────────┐
+                      │ 1. 发送半消息  │  ← Consumer 不可见
+                      │   (Half Msg)  │
+                      └──────┬───────┘
+                             │
+                             ▼
+                      ┌──────────────┐
+                      │ 2. 执行本地事务│  ← 扣库存、写订单等
+                      │   (Local Tx) │
+                      └──────┬───────┘
+                             │
+                       ┌─────┴─────┐
+                       │           │
+                      成功         失败
+                       │           │
+                       ▼           ▼
+                    ┌──────┐   ┌──────────┐
+                    │Commit│   │ Rollback │
+                    └──┬───┘   └──────────┘
+                       │
+                       ▼
+                Consumer 可见
+                正常消费
+
+  如果 Producer 在"执行本地事务"后宕机（未 Commit/Rollback）
+  → Broker 主动回查 Producer 侧的事务状态 → 决定 Commit 或 Rollback
+```
+
 **架构考量**：设计"可查可补偿"的事务模型，保证幂等与恢复能力。
 
 ### Q4：消息堆积如何处理？
@@ -204,6 +235,26 @@ min.insync.replicas=2      # 最少 2 个 ISR 确认，防止 Leader 单点退�
 enable.idempotence=true     # 幂等 Producer，解决重试导致的重复
 ```
 
+**acks=all 完整流程**（`min.insync.replicas=2`）：
+
+```
+  Producer                    Leader Broker              Follower 1        Follower 2
+     │                             │                         │                 │
+     │── send(msg) ───────────────→│                         │                 │
+     │                             │── append to log ──────→│                 │
+     │                             │── append to log ───────────────────────→│
+     │                             │                         │                 │
+     │                             │←── ACK ────────────────│                 │
+     │                             │←── ACK ──────────────────────────────────│
+     │                             │                                            │
+     │←── ACK (所有 ISR 确认) ─────│                                            │
+     │                                                                          │
+     ▼
+  send() 返回，确认成功
+```
+
+> 所有 ISR 副本都确认后，Leader 才向 Producer 返回成功。`min.insync.replicas=2` 确保至少有两个副本在线，防止只剩 Leader 时 `acks=all` 退化为 `acks=1`。
+
 **RocketMQ 发送结果**：
 
 ```java
@@ -224,15 +275,26 @@ RocketMQ 的两个维度配置：
 ```
 Producer 超时，无法区分：
   情况 1：消息没到 Broker → 重试没问题
-  情况 2：消息到了，ACK 丢了 → 重试会重复！
-
-Kafka 幂等 Producer 解决方案：
-  Broker 给每个 Producer 分配 PID，每条消息带 Sequence Number
-  Broker 检测到重复 seq → 丢弃，返回 ACK
-  → Producer 放心重试，不会重复
-
-兜底：业务消息体带唯一 msgId，Consumer 侧 Redis/DB 去重
+  情况 2：消息到了 Broker，ACK 丢了 → 重试会重复！
 ```
+
+**Kafka 幂等 Producer 原理（PID + Sequence Number）**：
+
+```
+  Producer (PID=1001)                    Broker
+       │                                     │
+       │── msg(seq=1) ──────────────────────→│ 写入 log，seq=1 ✓
+       │←── ACK(seq=1) ─────────────────────│
+       │                                     │
+       │── msg(seq=2) ───────────X(丢包)     │ 写入 log，seq=2 ✓
+       │   (超时，重试)                      │
+       │── msg(seq=2) ──────────────────────→│ seq=2 已存在 → 丢弃，返回 ACK
+       │←── ACK(seq=2) ─────────────────────│
+       │                                     │
+  结果：Producer 重试了，但 Broker 只存了一份 → 不重复
+```
+
+> **兜底方案**：无论 MQ 有什么机制，业务消息体必须带全局唯一 `msgId`，Consumer 侧通过 Redis/DB 做幂等校验（查重表），这是最后一道防线。
 
 **可靠性等级总结**：
 
