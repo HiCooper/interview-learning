@@ -249,6 +249,57 @@ sequenceDiagram
     Monitor->>Consumer: T1 重新获取锁，从 wait() 返回
 ```
 
+### wait set 不分角色 — 为什么必须 `notifyAll()` + `while`
+
+一个常被忽略的细节：Java 对象锁的 **wait set 不区分"生产者"和"消费者"**。
+
+```
+MessageQueue 对象 this（唯一的一把锁）
+├── monitor 锁
+└── wait set = { T1(生产者), T2(消费者), T3(消费者), T4(生产者), ... }
+```
+
+`put()` 和 `take()` 中的 `wait()` 都将当前线程放入**同一个 this.wait set**——JVM 不做角色标记，只管"这个线程在等这个对象"。
+
+**`notifyAll()` 执行后发生了什么？**
+
+```
+notifyAll() 被调用
+  │
+  ├─ 将 this.wait set 中所有线程一次性移出
+  │    T1(生产者) / T2(消费者) / T3(消费者) / T4(生产者) 全部被唤醒
+  │
+  ├─ 它们进入 entry set 竞争 synchronized 锁
+  │
+  └─ 每个线程从 wait() 返回后，立即重新检查自己的 while 条件：
+       T2: while (empty)    → empty==false → 跳出循环，消费消息 ✅
+       T3: while (empty)    → empty==true  → 再次 wait() ⏸️
+       T1: while (!empty)   → empty==true  → 跳出循环，生产消息 ✅
+       T4: while (!empty)   → empty==false → 再次 wait() ⏸️
+```
+
+**为什么只用 `notify()` + `if` 会死锁？**
+
+假设 wait set 中只有 2 个生产者，没有消费者：
+
+```
+当前状态: empty = false（消息待消费，消费者应该被唤醒）
+wait set = { Producer-X, Producer-Y }
+
+take() 调用 notify() → 随机唤醒 Producer-X
+  → if (empty) { wait(); }   // if 只检查一次！
+  → empty 仍为 false，Producer-X 不会 wait
+  → 没有消费者被唤醒，消息永远不会被消费
+  → 所有线程最终都进入 wait 状态 → 死锁 ❌
+```
+
+这就是两条经典规则的由来：
+
+- **`notifyAll()` 而非 `notify()`**：因为 JVM 不知道 wait set 里谁是生产者谁是消费者，`notify()` 可能唤醒"错误角色"。`notifyAll()` 叫醒所有人，由 `while` 条件筛选。
+- **`while` 而非 `if`**：`if` 只检查一次条件，被虚假唤醒或错误唤醒后直接往下走。`while` 每次从 `wait()` 返回都重新检查——条件不满足的线程自动 `wait()` 回去。**while 循环充当了"角色过滤器"**。
+
+> 《Effective Java》第 81 条：永远优先用 `notifyAll()` 而非 `notify()`，除非你能保证条件谓词（condition predicate）只对应一种等待者线程——在实际代码中这种保证几乎不可能。
+
 **关键规则**：
 
 | 规则 | 说明 |
