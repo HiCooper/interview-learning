@@ -1,6 +1,6 @@
 ---
 title: Redis
-description: Redis 持久化机制、集群方案、淘汰策略、过期键删除与热点榜单设计
+description: Redis 持久化机制、集群方案、分布式锁、淘汰策略、过期键删除与热点榜单设计
 ---
 
 ## 概述
@@ -20,8 +20,10 @@ description: Redis 持久化机制、集群方案、淘汰策略、过期键删�
 
 - **持久化**：RDB（快照，fork子进程，灾难恢复友好，可能丢数据）→ AOF（追加日志，三种同步策略，更安全但文件更大）
 - **集群**：Sentinel（监控+自动故障转移，AP模型）→ Redis Cluster（原生分片，CRC16%16384哈希槽，MOVED重定向）
+- **Tair（阿里分布式 KV）**：控制面(ConfigServer)/数据面(DataServer)分离 + 一致性哈希 bucket + 可插拔存储引擎
 - **淘汰策略**：noeviction（默认报错）→ allkeys-lru（LRU淘汰）→ allkeys-lfu（LFU淘汰，4.0+，冷热区分更好）→ volatile-ttl
 - **过期键删除**：定时随机检查 + 读取时惰性删除 + maxmemory扫描全key删除
+- **分布式锁**：SET NX EX 原子加锁 + value 唯一标识 + Lua 判断删除 + 看门狗续期；主从异步复制会丢锁，强一致用 ZK/etcd
 - **LRU vs LFU**：LRU按最近使用时间 → LFU按使用频率，LFU更适合冷热数据区分，避免偶发访问挤掉热点
 - **Redis Stack**：JSON、Search、Time Series、Bloom/Cuckoo过滤器等可选模块
 - **Redis 7+**：Functions（服务端脚本）、ACL v2（细粒度权限）、Sharded Pub/Sub
@@ -96,10 +98,80 @@ flowchart LR
     N1 -.->|"MOVED 重定向"| Client
 ```
 
+### Tair（阿里分布式 KV 集群）
+
+阿里自研的分布式 KV 存储系统（C++，非 Redis 封装），可看作 Redis 集群方案的另一种架构思路。注意区分：**经典 Tair**（自研分布式 KV）vs **阿里云 Tair（兼容 Redis）**（企业级 Redis 增强版）。
+
+### 为什么需要 Tair？（它解决什么问题）
+
+Tair 诞生于淘宝早期（约 2010 年）的海量缓存场景，本质是解决 Memcached / 早期 Redis 在大规模分布式下暴露的痛点：
+
+| 痛点 | 说明 | Tair 的解法 |
+|------|------|------------|
+| **单机内存上限** | 单机缓存容量有限，海量商品/交易数据装不下 | 分布式分片，数据横向拆到多节点 |
+| **节点故障丢数据 → 缓存雪崩** | Memcached 无持久化、无副本，宕机数据全丢，请求瞬间穿透到 DB | 多副本（bucket 3 副本 + 主备）高可用 |
+| **存储需求差异化** | 纯缓存 / 持久化 / 大容量低成本，不同业务诉求不同 | 可插拔存储引擎（mdb/ldb/rdb/fdb） |
+| **弹性扩缩容** | 大促需快速扩容、活动后缩容，人工搬数据不可行 | bucket 粒度自动迁移，ConfigServer 调度 |
+| **多业务各自为政** | 每个业务自搭一套缓存，运维成本高、资源浪费 | namespace 隔离，统一平台多业务共用 |
+
+> 一句话：**Tair = 解决「海量数据 + 高可用 + 弹性伸缩 + 多业务统一」的分布式 KV 平台**，而不只是一个"支持更大内存的 Redis"。
+
+**三大角色：控制面与数据面分离**
+
+```mermaid
+flowchart TB
+    CS["ConfigServer<br/>(控制面：元数据 / 心跳 / 迁移调度)"]
+    Client["Client<br/>(本地缓存路由，直达节点)"]
+    DS["DataServer<br/>(数据面：bucket + 多副本 + 可插拔引擎)"]
+
+    Client -->|"① 拉取路由表（哈希环 + bucket）"| CS
+    DS -->|"② 心跳 / 上报负载"| CS
+    Client -->|"③ 读写请求直达"| DS
+```
+
+| 角色 | 职责 | 关键点 |
+|------|------|--------|
+| **Client** | 提供 put/get API，本地缓存路由表，直接与 DataServer 通信 | 无代理转发，**无中心瓶颈** |
+| **ConfigServer** | 维护元数据（节点/bucket 分布/副本/负载），心跳监控，调度迁移 | 不碰业务数据，只做控制面 |
+| **DataServer** | 存储数据，以 bucket 为单位，可插拔存储引擎 | 负责过期清理、备份 |
+
+**数据分布：一致性哈希 + bucket**
+
+- key 映射到哈希环，环切成若干段，每段对应一个 **bucket**
+- **bucket 是分布与迁移的最小单位**（类比 Redis Cluster 的 slot）
+- 每个 bucket 有 N 个副本（常见 3 份），分布在不同节点，1 master + 多 slave
+
+**复制与一致性**（同步复制机制）
+
+- 复制方式**可配置**：**同步复制**（master 等副本 ack 才返回，主挂了不丢数据）vs **异步复制**（默认，本地写完即返回，吞吐高）
+- **同步复制写路径**：master 本地写 → 产生增量日志 → 推送给 slave → slave 落定回 ack → master 等齐 slave ack 才向客户端返回"成功"
+- 本质是**主备同步复制**，保证 **RPO=0（已确认写入不丢失）**，而非 Raft/Paxos 那种**多数派共识的线性一致**；故障切换靠 **ConfigServer 仲裁**（心跳 → 提 slave 为 master），不是节点自组织选举
+
+**可插拔存储引擎**（Tair 核心特色）
+
+| 引擎 | 底层 | 场景 |
+|------|------|------|
+| **mdb** | 自研内存引擎 | 纯缓存、超高 QPS |
+| **ldb** | LevelDB | 持久化、大容量 |
+| **rdb** | RocksDB | 持久化、高写入吞吐 |
+| **fdb** | Flash/SSD 定制 | 超大容量、低成本 |
+
+**与 Redis Cluster 对比**
+
+| 维度 | Redis Cluster | Tair |
+|------|--------------|------|
+| 数据分布 | CRC16 % 16384 哈希槽 | 一致性哈希 + bucket |
+| 路由 | 客户端缓存 slot 表 + MOVED | 客户端缓存路由表 + 直达 |
+| 控制面 | 无独立控制节点（gossip） | 独立 ConfigServer 主备 |
+| 存储引擎 | 单一（内存 + RDB/AOF） | **可插拔**（mdb/ldb/rdb/fdb） |
+| 复制一致性 | 默认异步 + 可选 `WAIT` | 同步/异步可配，同步复制 RPO=0 |
+| 迁移 | 槽迁移 | bucket 迁移（ConfigServer 调度） |
+
 | 方案 | 说明 |
 |------|------|
 | **哨兵模式** | Sentinel 监控 + 自动故障转移 |
 | **Redis Cluster** | 原生数据分片集群 |
+| **Tair** | 阿里分布式 KV：控制面/数据面分离 + 可插拔存储引擎 |
 
 ---
 
@@ -222,6 +294,66 @@ flowchart LR
 
 ---
 
+## Redis 分布式锁
+
+### 演进：从 SETNX 到安全释放
+
+| 阶段 | 写法 | 问题 |
+|------|------|------|
+| ① 基础版 | `SETNX key value` + `EXPIRE key ttl` | 两步非原子，`SETNX` 后进程挂了 → 锁永不过期 |
+| ② 原子加锁 | `SET key value NX EX ttl` | 加锁+过期原子，但释放仍有问题 |
+| ③ 安全释放 | Lua：先 GET 判断 value 再 DEL | 防止误删别人的锁 |
+
+三个关键点：
+
+1. **value 用唯一标识**（UUID / 线程 ID）：区分锁的持有者
+2. **加锁用原子命令**：`SET lock:xxx <uuid> NX EX 30`
+3. **释放用 Lua 保证"判断 + 删除"原子**：
+
+```lua
+-- 判断是自己的锁才删除
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+else
+    return 0
+end
+```
+
+### 锁过期与看门狗（Watchdog）
+
+**问题**：业务执行时间 > 锁 TTL → 锁被自动释放 → 其他线程拿到锁 → 并发。
+
+**方案**：Redisson 默认锁 TTL 30s，**看门狗每 10s 续期**到 30s，业务执行完主动释放；进程挂了看门狗停止续期，锁到期自动释放。
+
+### 可重入锁（Redisson）
+
+Redisson 用 **HASH 结构**存锁：`field = 线程标识`，`value = 重入次数`。加锁 +1、解锁 -1，减到 0 删除 key。
+
+### 主从切换丢锁 → RedLock
+
+Redis 主从**异步复制**，主挂了 slave 还没同步到锁 → 锁丢失，别的客户端又能拿到锁。
+
+RedLock 思路：向 **N 个独立 Redis 实例**（非主从）依次加锁，**超过半数成功**且总耗时 < TTL 才算成功；释放时向所有实例释放。
+
+> 争议（Martin Kleppmann vs Antirez）：RedLock 依赖时钟，GC 停顿 / 时钟跳跃仍可能破坏互斥，**无法保证绝对正确**。强正确性场景（资金/库存）应改用 ZK/etcd。
+
+### Redis vs ZooKeeper 分布式锁
+
+| 维度 | Redis | ZooKeeper |
+|------|-------|-----------|
+| 一致性模型 | AP（主从切换可能丢锁） | CP（ZAB 共识） |
+| 实现 | SET NX + Lua + 看门狗 | 临时顺序节点 + Watch |
+| 性能 | 高（微秒级） | 较低（写需半数确认） |
+| 锁释放 | 主动删 + 看门狗防过期 | 会话断开自动删除（临时节点） |
+| 适用 | 一般互斥、高并发 | 资金扣减、库存等强正确性 |
+
+### 选型结论
+
+- **一般场景**：Redis + Redisson（看门狗 + 可重入），够用且高性能
+- **强正确性场景**：ZK/etcd（CP，临时节点自动释放，不依赖续期）
+
+---
+
 ## 自测
 
 1. **RDB 和 AOF 的核心取舍是什么？生产环境通常如何配置？**
@@ -241,3 +373,12 @@ flowchart LR
 
 6. **高并发场景下热点榜单的写入瓶颈如何解决？**
    <br/>→ 三个手段：（1）MQ 异步削峰，用户行为先入消息队列，批量消费后 Pipeline 写 Redis；（2）多级 ZSET 按时间分层（hour/day/week），避免单个 ZSET 过大；（3）ZREMRANGEBYRANK 定期裁剪保留前 N 条，控制内存。极端场景还可将热点 item 的计数拆到多个 slot 分散写入压力。
+
+7. **Tair 相比 Redis Cluster 在架构上有什么不同？**
+   <br/>→ Tair 采用控制面（ConfigServer）/数据面（DataServer）分离 + 客户端本地路由直达，数据分布用一致性哈希 + bucket（而非 16384 槽），并支持可插拔存储引擎（mdb 内存 / ldb / rdb / fdb）。Redis Cluster 用 gossip 去中心化、无独立控制节点，存储引擎单一。两者都无代理转发，但 Tair 多了"存储引擎可换"和"ConfigServer 主动调度迁移"。
+
+8. **Redis 分布式锁为什么不能只用 `SETNX`？正确实现要满足哪些点？**
+   <br/>→ `SETNX` 与 `EXPIRE` 两步非原子，中间进程挂掉锁会永不过期。正确实现：加锁用原子命令 `SET key uuid NX EX 30`；value 用唯一标识区分持有者；释放用 Lua 先判断 value 再 DEL 防止误删；配合看门狗续期避免业务超时锁被提前释放。
+
+9. **Redis 主从切换为什么可能丢锁？RedLock 能否彻底解决？强一致场景该用什么？**
+   <br/>→ 主从异步复制，主挂了 slave 未同步到锁，新主上锁丢失。RedLock 向 N 个独立实例加锁、过半成功才算成功，但依赖时钟，GC 停顿/时钟跳跃下仍无法保证绝对互斥。强一致场景（资金/库存）用 ZK/etcd（CP、临时节点会话断开自动释放）。
