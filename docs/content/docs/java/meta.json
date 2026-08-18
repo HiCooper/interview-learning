@@ -1,4 +1,4 @@
 {
   "title": "Java 基础",
-  "pages": ["index", "concurrency", "jvm", "collections", "nio", "sorting"]
+  "pages": ["index", "basics", "collections", "concurrency", "jmm", "jvm", "nio", "sorting"]
 }

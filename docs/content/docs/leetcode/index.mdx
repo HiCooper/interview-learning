@@ -8,6 +8,10 @@ Leetcode 高频算法题解合集，涵盖动态规划、双指针、哈希表�
 ## 题目导航
 
 <Cards>
+  <Card title="链表高频题" href="/docs/leetcode/linked-list" description="反转链表、环形链表、快慢指针" />
+  <Card title="二叉树高频题" href="/docs/leetcode/binary-tree" description="四种遍历、最大深度、直径" />
+  <Card title="堆与 Top K" href="/docs/leetcode/heap" description="堆、Top K、快速选择、堆排序" />
+  <Card title="字符串高频题" href="/docs/leetcode/string" description="大数相加、整数转罗马数字" />
   <Card title="最长连续子序列" href="/docs/leetcode/longest-increasing-subsequence" description="动态规划经典问题，O(n²) 解法" />
   <Card title="最小路径和" href="/docs/leetcode/minimum-path-sum" description="网格 DP，含路径回溯" />
   <Card title="背包问题" href="/docs/leetcode/knapsack" description="完全背包（物品可重复）" />
@@ -18,6 +22,25 @@ Leetcode 高频算法题解合集，涵盖动态规划、双指针、哈希表�
 </Cards>
 
 ## 算法分类速览
+
+### 链表
+- **反转链表** — 三指针迭代 / 递归，`curr.next = prev`
+- **环形链表** — 快慢指针判环，相遇后同速前进找入口
+- **合并有序链表** — 哨兵节点 + 双指针
+
+### 二叉树
+- **四种遍历** — 前中后序（递归/栈）、层序（队列 + size 分层）
+- **最大深度** — `max(left, right) + 1`
+- **直径** — 后序遍历，`left + right` 全局最大
+
+### 堆
+- **Top K 大** — 小顶堆 / 快速选择
+- **最小 k 个数** — 大顶堆
+- **堆排序** — 建堆 + 反复取堆顶
+
+### 字符串
+- **大数相加** — 末位对齐 + 进位，反转结果
+- **整数转罗马数字** — 从大到小贪心
 
 ### 动态规划
 - **最长连续子序列** — 一维 DP，`dp[i]` 表示以 `i` 结尾的最长递增子序列长度

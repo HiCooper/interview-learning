@@ -1,0 +1,196 @@
+---
+title: 堆与 Top K
+description: 堆的实现、Top K、最小 k 个数、堆排序
+---
+
+## 问题概述
+
+堆是「动态维护最值」的工具。当问题需要「反复取最大/最小」「在流式数据中维护 Top K」时，优先想到堆。Top K 问题有堆和快速选择两种经典解法。
+
+| 问题 | 解法 | 复杂度 |
+|------|------|--------|
+| Top K 大 | 小顶堆 / 快速选择 | O(n log k) / 平均 O(n) |
+| 最小 k 个数 | 大顶堆 / 快速选择 | O(n log k) / 平均 O(n) |
+| 堆排序 | 建堆 + 反复取堆顶 | O(n log n) |
+
+---
+
+## 速查卡
+
+- **堆**：完全二叉树，父节点 ≥（大顶）或 ≤（小顶）子节点；`PriorityQueue` 默认小顶堆
+- **Top K 大 → 小顶堆**：维护大小为 k 的小顶堆，堆顶就是第 k 大；新元素比堆顶大则替换
+- **最小 k 个数 → 大顶堆**：维护大小为 k 的大顶堆，堆顶是这 k 个里最大的，超过 k 时弹出
+- **快速选择**：快排 partition 后，若 pivot 位置正好是 k 则左侧即答案，否则只递归一侧
+- **堆排序**：建堆 O(n) + 每次取堆顶 O(log n)，共 O(n log n)，原地不稳定
+
+---
+
+## 一、堆的基础
+
+### 什么是堆
+
+堆是一种**完全二叉树**，满足「堆序性」：
+
+| 类型 | 定义 | 堆顶 |
+|------|------|------|
+| **大顶堆** | 每个父节点 ≥ 子节点 | 最大值 |
+| **小顶堆** | 每个父节点 ≤ 子节点 | 最小值 |
+
+完全二叉树可以**用数组存储**：节点 `i` 的左孩子是 `2i+1`，右孩子是 `2i+2`，父节点是 `(i-1)/2`（0 索引）。
+
+### Java 的 PriorityQueue
+
+```java
+PriorityQueue<Integer> minHeap = new PriorityQueue<>();                    // 默认小顶堆
+PriorityQueue<Integer> maxHeap = new PriorityQueue<>((a, b) -> b - a);     // 大顶堆
+PriorityQueue<Integer> maxHeap2 = new PriorityQueue<>(Collections.reverseOrder());
+
+minHeap.offer(3); minHeap.offer(1); minHeap.offer(2);
+minHeap.poll();  // 弹出最小值 1
+minHeap.peek();  // 查看堆顶（不弹出）2
+```
+
+> **易错点**：`PriorityQueue` **默认是小顶堆**，取 Top K **大** 要用小顶堆（反过来）。很多人写反。
+
+---
+
+## 二、Top K 大元素（215）
+
+### 解法一：小顶堆
+
+维护一个大小为 `k` 的**小顶堆**，堆顶就是「第 k 大」：
+
+```java
+public int findKthLargest(int[] nums, int k) {
+    PriorityQueue<Integer> heap = new PriorityQueue<>();  // 小顶堆
+    for (int num : nums) {
+        heap.offer(num);
+        if (heap.size() > k) {
+            heap.poll();  // 弹出最小的，保持堆大小为 k
+        }
+    }
+    return heap.peek();  // 堆顶 = 第 k 大
+}
+```
+
+**为什么用小顶堆**：堆里始终保留「当前看到的最大的 k 个」，堆顶是这 k 个里**最小的**，也就是「第 k 大」。新元素若比堆顶还小，说明它不是 Top K，直接淘汰。
+
+复杂度：O(n log k) 时间，O(k) 空间。适合 k 较小、数据量大甚至流式的场景。
+
+### 解法二：快速选择（Quick Select）
+
+基于快排的 partition，每次确定一个 pivot 的最终位置，只需递归一侧：
+
+```java
+public int findKthLargest(int[] nums, int k) {
+    int target = nums.length - k;  // 第 k 大 = 升序排序后下标 target
+    int left = 0, right = nums.length - 1;
+    while (left <= right) {
+        int p = partition(nums, left, right);
+        if (p == target) return nums[p];
+        else if (p < target) left = p + 1;   // 答案在右侧
+        else right = p - 1;                  // 答案在左侧
+    }
+    return -1;
+}
+
+private int partition(int[] nums, int left, int right) {
+    int pivot = nums[right];  // 以最右为基准
+    int i = left;             // i 左侧都是 <= pivot 的
+    for (int j = left; j < right; j++) {
+        if (nums[j] <= pivot) {
+            swap(nums, i++, j);
+        }
+    }
+    swap(nums, i, right);     // pivot 归位到 i
+    return i;
+}
+```
+
+**为什么快**：partition 后 pivot 已在最终位置，比较下标与 target，**只递归一侧**，平均 O(n)（快排要两侧都递归所以 O(n log n)）。最坏 O(n²)（每次 pivot 都取到极值）。
+
+| 对比 | 小顶堆 | 快速选择 |
+|------|--------|----------|
+| 时间 | O(n log k) | 平均 O(n)，最坏 O(n²) |
+| 空间 | O(k) | O(1) |
+| 稳定性 | 稳定，适合流式/动态数据 | 需一次性加载数组，会改原数组 |
+
+---
+
+## 三、最小的 k 个数（剑指 Offer 40）
+
+思路与 Top K 对称：维护大小为 `k` 的**大顶堆**，堆顶是「这 k 个里最大的」，遇到更小的就替换：
+
+```java
+public int[] getLeastNumbers(int[] arr, int k) {
+    if (k == 0) return new int[0];
+    PriorityQueue<Integer> heap = new PriorityQueue<>((a, b) -> b - a);  // 大顶堆
+    for (int num : arr) {
+        heap.offer(num);
+        if (heap.size() > k) {
+            heap.poll();  // 弹出最大的，保持堆里是「最小的 k 个」
+        }
+    }
+    int[] res = new int[k];
+    for (int i = 0; i < k; i++) res[i] = heap.poll();
+    return res;
+}
+```
+
+> 记忆口诀：**「找大的用小堆，找小的用大堆」**——堆里放的是「答案集合」，堆顶是集合里「最容易被淘汰」的那个。
+
+---
+
+## 四、堆排序
+
+堆排序 = 建大顶堆 → 反复交换堆顶与末尾 → 下沉调整：
+
+```java
+public void heapSort(int[] nums) {
+    int n = nums.length;
+    // ① 建堆：从最后一个非叶子节点开始下沉
+    for (int i = n / 2 - 1; i >= 0; i--) {
+        siftDown(nums, i, n);
+    }
+    // ② 排序：每次把堆顶（最大）交换到末尾，缩小堆
+    for (int i = n - 1; i > 0; i--) {
+        swap(nums, 0, i);        // 最大值归位到 i
+        siftDown(nums, 0, i);    // 重新调整剩余堆
+    }
+}
+
+private void siftDown(int[] nums, int i, int size) {
+    while (2 * i + 1 < size) {
+        int largest = i;
+        int left = 2 * i + 1, right = 2 * i + 2;
+        if (left < size && nums[left] > nums[largest]) largest = left;
+        if (right < size && nums[right] > nums[largest]) largest = right;
+        if (largest == i) break;
+        swap(nums, i, largest);
+        i = largest;  // 继续下沉
+    }
+}
+```
+
+- **建堆**：从 `n/2 - 1`（最后一个非叶节点）往前逐个下沉，O(n)
+- **排序**：每次取堆顶 O(log n)，共 n 次，O(n log n)
+- 原地排序、不稳定
+
+---
+
+## 自测
+
+1. **PriorityQueue 默认是什么堆？求 Top K 大为什么要用小顶堆？**
+   <br/>→ 默认小顶堆。小顶堆堆顶是「当前最大的 k 个里的最小值」即第 k 大；新元素比堆顶小就说明它不是 Top K，直接淘汰。若用大顶堆，堆顶是最大值，弹出反而丢掉正确答案。
+
+2. **快速选择为什么平均 O(n) 而快排 O(n log n)？**
+   <br/>→ 快排 partition 后两侧都要递归；快速选择判断 pivot 位置与 target 的关系，只递归一侧。T(n) = T(n/2) + O(n) → O(n)。最坏情况（每次 pivot 取极值）退化为 O(n²)。
+
+3. **「找大的用小堆，找小的用大堆」怎么理解？**
+   <br/>→ 堆里维护的是「答案集合」。找 Top K 大，答案集合是「最大的 k 个」，堆顶应是集合里最小的（小顶堆），新元素大于堆顶才替换；找最小 k 个，答案集合是「最小的 k 个」，堆顶是集合里最大的（大顶堆），新元素小于堆顶才替换。
+
+4. **堆排序建堆为什么从 `n/2 - 1` 开始？时间复杂度为什么是 O(n) 而不是 O(n log n)？**
+   <br/>→ 叶子节点（下标 ≥ n/2）天然是合法的单节点堆，无需调整，所以从最后一个非叶节点 `n/2-1` 向前下沉。自底向上建堆，各层下沉次数总和是 O(n)（收敛，而非每层都 log n）。
+
+5. **堆为什么用数组存储？节点 i 的父子下标关系是什么？**
+   <br/>→ 堆是完全二叉树，层内紧凑无空洞，用数组按层存储即可。0 索引下：左孩子 `2i+1`、右孩子 `2i+2`、父 `(i-1)/2`。

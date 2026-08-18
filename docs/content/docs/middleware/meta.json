@@ -1,4 +1,4 @@
 {
   "title": "中间件",
-  "pages": ["redis", "mq", "kafka", "spring-cloud", "dubbo", "rpc", "zookeeper", "netty"]
+  "pages": ["redis", "mq", "kafka", "spring", "spring-cloud", "dubbo", "rpc", "zookeeper", "netty", "elasticsearch"]
 }

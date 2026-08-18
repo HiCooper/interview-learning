@@ -2,6 +2,10 @@
   "title": "Leetcode 刷题",
   "pages": [
     "index",
+    "linked-list",
+    "binary-tree",
+    "heap",
+    "string",
     "longest-increasing-subsequence",
     "minimum-path-sum",
     "knapsack",

@@ -8,8 +8,10 @@ Java 基础部分涵盖后端面试中最核心的知识点。
 ## 内容导航
 
 <Cards>
-  <Card title="并发编程" href="/docs/java/concurrency" description="线程池、AQS、synchronized、ReentrantLock 对比" />
+  <Card title="Java 语言基础" href="/docs/java/basics" description="final/finally/finalize、==/equals、String 不可变、异常" />
   <Card title="集合框架" href="/docs/java/collections" description="HashMap、ConcurrentHashMap、红黑树" />
+  <Card title="并发编程" href="/docs/java/concurrency" description="线程池、AQS、synchronized、ReentrantLock 对比" />
+  <Card title="JMM 内存模型" href="/docs/java/jmm" description="可见性、原子性、有序性、happens-before" />
   <Card title="排序算法" href="/docs/java/sorting" description="快速排序、直接插入排序、希尔排序" />
   <Card title="JVM" href="/docs/java/jvm" description="类加载、内存布局、垃圾回收、GC 收集器" />
   <Card title="NIO" href="/docs/java/nio" description="BIO vs NIO、零拷贝" />
@@ -34,6 +36,17 @@ Java 基础部分涵盖后端面试中最核心的知识点。
 ### HashMap
 - 数组 + 链表 + 红黑树（链表 ≥ 8 且容量 ≥ 64 时树化）
 - 非线程安全，ConcurrentHashMap 用 CAS + synchronized 实现线程安全
+
+### Java 基础
+- `==` 比引用地址、`equals` 比内容，重写 equals 必须重写 hashCode
+- String 不可变：`final byte[]` + 无修改方法，好处是常量池复用、缓存 hash、线程安全
+- Java 只有值传递，传对象时传的是引用副本
+- final 修饰不可变、finally 必执行清理块、finalize 已废弃
+
+### JMM
+- 三大特性：原子性（锁/CAS）、可见性（volatile）、有序性（happens-before）
+- volatile 保证可见性 + 禁止重排，不保证原子性
+- happens-before 判断「一个操作对另一个是否可见」
 
 ### JVM
 - 类加载：加载 → 连接(验证→准备→解析) → 初始化，双亲委派模型

@@ -11,6 +11,7 @@ description: JVM 类加载、内存布局、垃圾回收与调优
 - **GC 算法**：标记-清除（碎片）、复制（新生代）、标记-整理（老年代）、分代收集（组合策略）
 - **GC 收集器**：JDK 8 默认 Parallel；JDK 9+ 默认 G1（Region，无碎片）；ZGC（JDK 11+，亚毫秒停顿）
 - **分代 vs 单代**：分代收集器（Serial/Parallel/CMS/G1）才有 Eden/Survivor；ZGC 11~20 单代不分，JDK 21 分代 ZGC 回归
+- **四种引用**：强（永不回收）> 软（内存不足回收，缓存）> 弱（下次 GC 回收，ThreadLocal）> 虚（仅通知，堆外内存）
 - **调优**：先测量后调优 → Xms=Xmx → 按场景选 GC（吞吐 Parallel/低延迟 G1/亚毫秒 ZGC）→ 优先减少对象创建 > 调参数
 
 ---
@@ -306,7 +307,35 @@ flowchart LR
 
 ---
 
-## 四、JVM 调优
+## 四、四种引用类型
+
+Java 提供四种引用，强度递减：**强 > 软 > 弱 > 虚**。后三种可配合 `ReferenceQueue` 使用，让程序在对象被回收时收到通知。
+
+| 类型 | 回收时机 | 典型用途 |
+|------|---------|---------|
+| **强引用** | 只要可达，永不回收 | 普通 `new` 出来的对象 |
+| **软引用** | 内存不足（OOM 前）才回收 | 缓存（图片缓存、`SoftReference` 缓存） |
+| **弱引用** | 下次 GC 时无论内存是否够都回收 | `ThreadLocal`、`WeakHashMap`、缓存 |
+| **虚引用** | 任何时候都可能被回收，本身无法拿到对象 | 堆外内存回收（`DirectByteBuffer` 的 `Cleaner`） |
+
+```java
+Object obj = new Object();                    // 强引用
+SoftReference<Object> soft = new SoftReference<>(new Object());  // 软引用
+WeakReference<Object> weak = new WeakReference<>(new Object());  // 弱引用
+PhantomReference<Object> phantom = new PhantomReference<>(new Object(), queue);  // 虚引用
+```
+
+### 关键区别
+
+- **软引用 vs 弱引用**：软引用在**内存不够时**才回收（适合做「内存敏感缓存」，OOM 前自动释放）；弱引用**只要 GC 就回收**（适合「只要有强引用就用，没有就释放」的场景）。
+- **弱引用 vs 虚引用**：弱引用还能通过 `weak.get()` 拿到对象（可能为 null）；虚引用 `get()` **永远返回 null**，无法通过它访问对象，唯一作用是在对象回收时收到 `ReferenceQueue` 通知。
+- **ThreadLocal 为何用弱引用**：`ThreadLocalMap` 的 key 是弱引用，当 ThreadLocal 对象没有外部强引用时，key 会被 GC，避免 ThreadLocal 被 Map 拖住无法回收。但 value 仍是强引用，需 `remove()` 清理（见并发编程 ThreadLocal 章节）。
+
+> 一句话：**强引用管「活」，软引用管「内存紧」，弱引用管「下次 GC」，虚引用管「回收通知」。**
+
+---
+
+## 五、JVM 调优
 
 ### 排查命令
 
@@ -386,3 +415,6 @@ flowchart LR
 
 7. **JVM 调优的核心思路是什么？从哪些方向优化？**
    <br/>→ 先测量后调优（jstat/GC 日志定位瓶颈，不盲目改参数）。方向：`-Xms=-Xmx` 避免动态扩容；调大 Survivor 避免过早晋升、控制大对象直接进老年代（`PretenureSizeThreshold`）、设 `MaxMetaspaceSize`；按场景选 GC（吞吐 Parallel/低延迟 G1/亚毫秒 ZGC）；优先减少对象创建（复用、`StringBuilder`）并利用 JIT 逃逸分析栈上分配。
+
+8. **软引用和弱引用的回收时机有什么区别？各适合什么场景？**
+   <br/>→ 软引用在内存不足（OOM 前）才回收，适合「内存敏感缓存」；弱引用只要发生 GC 就回收，适合「ThreadLocal、WeakHashMap」这类无强引用即释放的场景。虚引用 `get()` 永远返回 null，仅用于回收通知（如 DirectByteBuffer 的 Cleaner 回收堆外内存）。

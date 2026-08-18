@@ -15,11 +15,13 @@ description: Transformer 架构、Tokenization、推理参数、Prompt 工程与
 
 ## 一、Transformer 架构
 
-### Self-Attention
+### Self-Attention（自注意力机制）
 
-核心公式：Attention = softmax(QK^T / √d_k) × V
+核心公式：**Attention(Q,K,V) = softmax(QK^T / √d_k) × V**
 
-每个 token 通过 **Q**（Query）询问「谁和我相关？」，**K**（Key）回答「我是谁？」，**V**（Value）提供实际内容。除以 √d_k 防止点积过大导致梯度消失。
+一句话直觉：让序列里**每个 token 都能「看到」其他所有 token**，并根据「相关性」决定「听谁的」。用数据库检索类比——**Q（Query）** 是查询、**K（Key）** 是索引、**V（Value）** 是内容：拿 Query 去和所有 Key 匹配算相似度，按相似度加权取出 Value。
+
+> 如需深入理解计算细节，推荐李宏毅老师的讲解：[Transformer & Self-Attention](https://www.youtube.com/watch?v=ugWDIIOHtPA&list=PLJV_el3uVTsOK_ZK5L0Iv_EQoL1JefRL4&index=62)
 
 ### Multi-Head Attention
 

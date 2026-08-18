@@ -1,0 +1,175 @@
+---
+title: Java 语言基础
+description: final/finally/finalize、== 与 equals、String 不可变、值传递、异常体系
+---
+
+## 速查卡
+
+- **final**：修饰类（不可继承）、方法（不可重写）、变量（不可变，引用不可改但对象内容可变）
+- **finally**：`try-catch` 后必执行的清理块；**finalize**：已被 `Object.finalize()` 废弃（JDK 9 起不推荐，性能差、时机不确定）
+- **== vs equals**：`==` 比引用地址（基本类型比值），`equals` 比内容（需重写），重写 `equals` 必须重写 `hashCode`
+- **String 不可变**：`final char[]`/`byte[]` + 无修改方法，好处是缓存 hash、常量池、线程安全
+- **值传递**：Java 只有值传递，传对象时传的是引用副本，方法内改对象内容会影响原对象，改引用本身不影响
+- **异常**：受检异常（编译期强制捕获）vs 非受检（RuntimeException/Error）；`finally` 中 return 会覆盖 try 的返回值
+
+---
+
+## 一、final / finally / finalize
+
+这是面试必问的「三胞胎」，三者语义完全不同：
+
+| 关键字 | 作用 | 说明 |
+|--------|------|------|
+| **final** | 修饰符 | 类不可继承、方法不可重写、变量不可变 |
+| **finally** | 异常处理 | `try-catch-finally` 中保证执行的清理块 |
+| **finalize** | 方法 | GC 回收前调用的钩子，**已废弃** |
+
+### final 修饰变量
+
+```java
+final int a = 10;          // 基本类型：值不可变
+final List<String> list = new ArrayList<>();  // 引用类型：引用不可变
+list.add("x");             // ✅ 对象内容可以变
+list = new ArrayList<>();  // ❌ 编译错误：不能重新赋值引用
+```
+
+> 常被追问：**final 修饰的引用类型，对象本身可变吗？** 可变。final 只锁住「引用指向」，不锁住「对象内容」。要真正不可变，需配合不可变对象（如 `String`、`Collections.unmodifiableList`）。
+
+### finally 的坑
+
+`finally` 中 `return` 会**覆盖** try 里的返回值：
+
+```java
+int f() {
+    try { return 1; }
+    finally { return 2; }   // 最终返回 2，而不是 1
+}
+```
+
+只要 JVM 不退出（`System.exit()` 或线程被 kill），`finally` 一定执行——即使 try 里 `return` 或 `throw`。
+
+### finalize 为什么被废弃
+
+`finalize()` 曾是「GC 回收前最后一个清理机会」，但问题很多：
+
+- **执行时机不确定**：GC 何时触发不确定，`finalize` 何时执行也不确定，可能导致资源迟迟不释放
+- **性能差**：有 `finalize` 的对象 GC 需要两轮（先入队列，再执行 finalize，再回收）
+- **不可靠**：finalize 中抛异常会中断，且对象可能被「复活」
+
+替代方案：`try-with-resources`（JDK 7+）自动释放资源，或显式 `close()`。JDK 9 起 `Object.finalize()` 标记为 deprecated，JDK 18 移除相关机制。
+
+---
+
+## 二、== 与 equals / hashCode
+
+### 区别
+
+| 比较 | 基本类型 | 引用类型 |
+|------|---------|---------|
+| `==` | 比较**值** | 比较**内存地址**（是否同一对象） |
+| `equals` | 不适用 | 比较**内容**（需类重写） |
+
+`Object.equals()` 默认实现就是 `==`（比地址），所以不重写 equals 的类，`equals` 和 `==` 等价。`String`、`Integer` 等已重写 equals 比内容。
+
+### 重写 equals 必须重写 hashCode
+
+**原因**：HashSet/HashMap 先用 `hashCode` 定位桶，再用 `equals` 判断是否相等。若两个对象 `equals` 相等但 `hashCode` 不同，会被散列到不同桶，导致「相等的对象」在 HashSet 中重复出现。
+
+```java
+// 正确范式
+@Override
+public boolean equals(Object o) {
+    if (this == o) return true;
+    if (o == null || getClass() != o.getClass()) return false;
+    Person p = (Person) o;
+    return age == p.age && Objects.equals(name, p.name);
+}
+
+@Override
+public int hashCode() {
+    return Objects.hash(name, age);
+}
+```
+
+**约定**：`equals` 相等 → `hashCode` 必相等；`hashCode` 相等 → `equals` 不一定相等（哈希冲突）。
+
+---
+
+## 三、String 不可变
+
+### 为什么不可变
+
+JDK 8 用 `private final char[] value`，JDK 9+ 用 `private final byte[] value`（Latin-1 压缩）；数组 `final` 且类不提供任何修改数组内容的方法（所有「修改」操作如 `substring`/`replace` 都返回新对象）。
+
+### 不可变的好处
+
+| 好处 | 说明 |
+|------|------|
+| **字符串常量池** | 相同字面量复用同一对象，节省内存 |
+| **缓存 hashCode** | `hashCode` 计算一次缓存，HashMap key 高效 |
+| **线程安全** | 不可变天然线程安全，多线程共享无副作用 |
+| **安全** | 作为参数/类名不可被篡改，避免安全漏洞 |
+
+### 常量池
+
+```java
+String s1 = "abc";                // 字面量 → 常量池
+String s2 = "abc";                // 复用常量池同一对象
+String s3 = new String("abc");    // 强制在堆创建新对象
+System.out.println(s1 == s2);     // true（同一常量池对象）
+System.out.println(s1 == s3);     // false（堆对象 vs 常量池对象）
+```
+
+`String.intern()` 可以把堆中的 String 放入常量池并返回池中引用。
+
+---
+
+## 四、值传递
+
+**Java 只有值传递，没有引用传递**——方法传参时拷贝一份「值的副本」。
+
+```java
+void change(int x) { x = 100; }        // 改的是副本，不影响原值
+
+void change(List<String> list) { list.add("a"); }  // 改对象内容，影响原对象
+void change2(List<String> list) { list = new ArrayList<>(); }  // 改引用副本，不影响原引用
+```
+
+> 面试关键点：传对象时，传的是「引用的副本」。通过副本操作对象内容（`list.add`）会影响原对象；但给副本重新赋值（`list = new ...`）只是让副本指向新对象，原引用不受影响。
+
+---
+
+## 五、异常体系
+
+```
+Throwable
+├── Error          非受检：JVM 级错误（OOM、StackOverflow），不该也不便捕获
+└── Exception
+    ├── RuntimeException  非受检：逻辑错误（NPE、越界、ClassCast），编译期不强制捕获
+    └── 其他 Exception    受检：必须显式 try-catch 或 throws（IOException、SQLException）
+```
+
+| 类型 | 是否强制处理 | 典型 |
+|------|:---:|------|
+| 受检异常 | 编译期强制 try-catch 或 throws | `IOException`、`SQLException` |
+| 非受检异常 | 不强制 | `NullPointerException`、`ArrayIndexOutOfBoundsException` |
+| Error | 不强制，也不应捕获 | `OutOfMemoryError`、`StackOverflowError` |
+
+---
+
+## 自测
+
+1. **final、finally、finalize 分别是什么？finalize 为什么被废弃？**
+   <br/>→ final 是修饰符（类/方法/变量不可变），finally 是异常处理的必执行清理块，finalize 是 GC 回收前钩子。finalize 执行时机不确定、性能差（需两轮 GC）、不可靠（可复活对象），JDK 9 废弃，替代为 try-with-resources。
+
+2. **为什么重写 equals 必须重写 hashCode？**
+   <br/>→ HashSet/HashMap 先用 hashCode 定位桶再 equals 判等。若 equals 相等但 hashCode 不同，会被散列到不同桶，导致「相等对象」重复出现，违反集合语义。约定：equals 相等则 hashCode 必相等。
+
+3. **String 为什么设计成不可变？JDK 9 有什么优化？**
+   <br/>→ 好处：常量池复用、缓存 hashCode、线程安全、安全防篡改。JDK 9 用 `byte[]` 替代 `char[]`，Latin-1 字符用 1 字节，节省内存（紧凑字符串）。
+
+4. **Java 是值传递还是引用传递？传对象时方法内修改会影响原对象吗？**
+   <br/>→ 只有值传递。传对象传的是引用副本：通过副本改对象内容（`list.add`）影响原对象；给副本重新赋值不影响原引用。这与 C++ 的引用传递（直接操作原引用）本质不同。
+
+5. **`finally` 中 return 会怎样？什么情况下 finally 不执行？**
+   <br/>→ finally 中 return 会覆盖 try/catch 的返回值。仅当 `System.exit()`、JVM 崩溃或线程被杀时 finally 才不执行。

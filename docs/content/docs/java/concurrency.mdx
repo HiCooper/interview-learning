@@ -8,6 +8,7 @@ description: 线程池、AQS、synchronized 与 ReentrantLock 对比分析
 - **线程池**：corePoolSize → 队列 → maxPoolSize → 拒绝策略。CPU 密集型设 N，IO 密集型设 2N
 - **AQS**：CLH 虚拟双向队列 + volatile state + CAS，模版方法模式，子类重写 tryAcquire/tryRelease
 - **synchronized 锁升级**：无锁 → 偏向锁（避免 CAS）→ 轻量级锁（CAS+自旋）→ 重量级锁（阻塞）。JDK21 移除偏向锁
+- **锁优化**：锁消除（逃逸分析去锁）、锁粗化（合并相邻锁）、自适应自旋（动态调自旋次数）、偏向延迟（启动阶段延迟偏向）
 - **synchronized vs ReentrantLock**：前者自动释放、JVM 内置；后者灵活（公平锁/超时/中断/多条件队列）、AQS 实现
 - **虚拟线程**（Java 21）：轻量级（~KB），阻塞时自动释放平台线程，无需池化
 - **CompletableFuture**：异步编排，thenApply/thenAccept/exceptionally
@@ -139,6 +140,34 @@ flowchart LR
 **轻量级锁**：偏向锁被其他线程访问时升级，等待线程自旋尝试获取。自旋超时或第三个线程介入时升级为重量级锁。
 
 **重量级锁**：除拥有锁外的所有线程阻塞。概括：偏向锁避免 CAS，轻量级锁用 CAS+自旋避免阻塞，重量级锁阻塞所有竞争线程。
+
+### 锁优化手段（JVM 层面）
+
+锁升级是「状态迁移」，锁优化是 JIT/JVM 对锁的「主动优化」，两者常被混淆：
+
+| 优化 | 原理 | 触发条件 |
+|------|------|----------|
+| **锁消除** | 逃逸分析发现锁对象不被其他线程访问，直接去掉同步 | 局部对象上的 synchronized（如 `StringBuffer` 局部变量） |
+| **锁粗化** | 连续对同一锁加锁/解锁，合并为一次大锁，减少加锁次数 | 循环体内反复加锁 |
+| **自适应自旋** | 自旋次数不再固定，根据上次自旋是否成功动态调整 | 轻量级锁竞争时 |
+| **偏向延迟** | 启动阶段（默认 4s）延迟启用偏向锁 | JVM 启动初期竞争激烈，偏向反成开销 |
+
+```java
+// 锁消除：sb 是局部对象，逃逸分析判定不会逃逸 → 去掉锁
+void append() {
+    StringBuffer sb = new StringBuffer();  // append 方法带 synchronized
+    sb.append("a").append("b");           // JIT 可能消除这些锁
+}
+
+// 锁粗化：循环内连续加锁 → 合并为一次锁住整个循环
+for (int i = 0; i < 100; i++) {
+    synchronized (lock) { count++; }   // 100 次加锁
+}
+// 优化后：
+synchronized (lock) { for (int i = 0; i < 100; i++) count++; }
+```
+
+> **面试区分**：锁升级回答「无锁→偏向→轻量→重量」的状态流转；锁优化回答「JVM 怎么让锁更省」——消除、粗化、自适应自旋、偏向延迟。
 
 ---
 
