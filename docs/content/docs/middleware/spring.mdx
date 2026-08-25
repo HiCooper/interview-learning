@@ -1,6 +1,6 @@
 ---
 title: Spring 核心
-description: IoC 与 Bean 生命周期、循环依赖三级缓存、事务、SpringMVC 原理
+description: IoC 与 Bean 生命周期、循环依赖三级缓存、事务、SpringMVC 原理、常用钩子
 ---
 
 ## 速查卡
@@ -11,6 +11,7 @@ description: IoC 与 Bean 生命周期、循环依赖三级缓存、事务、Spr
 - **事务传播**：REQUIRED（默认，加入/新建）、REQUIRES_NEW（新事务，挂起当前）、NESTED（嵌套，可独立回滚）
 - **事务失效**：自调用、非 public、异常被 catch、抛受检异常、多线程
 - **SpringMVC**：DispatcherServlet → HandlerMapping → HandlerAdapter → Controller → ViewResolver → 渲染
+- **常用钩子**：`@PostConstruct`/`@PreDestroy`、`BeanPostProcessor`、Aware 系列、`BeanFactoryPostProcessor`、事件监听、`SmartLifecycle`
 
 ---
 
@@ -202,6 +203,52 @@ flowchart LR
 
 ---
 
+## 五、Spring 常用钩子
+
+Spring 的「钩子」= 生命周期回调接口/注解，让你在容器和 Bean 各阶段插入自定义逻辑。核心就这几类：
+
+| 钩子 | 时机 / 作用 |
+|------|------------|
+| `@PostConstruct` / `@PreDestroy` | Bean 初始化完成 / 销毁前（**最常用**） |
+| `InitializingBean` / `DisposableBean` | 同上，接口形式 |
+| `BeanPostProcessor` | 所有 Bean 初始化前后（**AOP 代理在此生成**） |
+| `BeanFactoryPostProcessor` | 容器层，修改 BeanDefinition |
+| Aware 系列（`ApplicationContextAware` 等） | 注入容器资源（上下文、Environment 等） |
+| `ApplicationListener` / `@EventListener` | 监听容器事件 |
+| `SmartLifecycle` | 启停控制，可指定执行顺序 |
+
+```java
+@Component
+public class MyService implements ApplicationContextAware {
+
+    @PostConstruct
+    public void init() { /* 初始化 */ }
+
+    @PreDestroy
+    public void cleanup() { /* 销毁 */ }
+
+    @Override
+    public void setApplicationContext(ApplicationContext ctx) { /* 拿容器 */ }
+}
+```
+
+`BeanPostProcessor` 是扩展框架的核心钩子（Spring AOP、`@Autowired` 都基于它）：
+
+```java
+@Component
+public class MyBeanPostProcessor implements BeanPostProcessor {
+    public Object postProcessBeforeInitialization(Object bean, String name) { return bean; }
+    // AOP 代理就在这一步生成，返回的可能是被代理后的对象
+    public Object postProcessAfterInitialization(Object bean, String name) { return bean; }
+}
+```
+
+完整顺序（面试常考）：实例化 → 属性填充 → Aware → `postProcessBeforeInitialization` → `@PostConstruct` → `init-method` → `postProcessAfterInitialization`（生成代理）→ 就绪 → `@PreDestroy` → `destroy-method`。
+
+> 记忆口诀：**Bean 级**（Aware / 初始化销毁 / BeanPostProcessor）→ **容器级**（BeanFactoryPostProcessor / 事件监听 / SmartLifecycle）。
+
+---
+
 ## 自测
 
 1. **IoC 和 DI 是什么关系？IoC 解决了什么问题？**
@@ -221,3 +268,6 @@ flowchart LR
 
 6. **SpringMVC 一次请求的完整流程是什么？**
    <br/>→ DispatcherServlet 接收请求 → HandlerMapping 定位 Controller → HandlerAdapter 执行 → 返回 ModelAndView → ViewResolver 解析视图 → 渲染响应。`@RestController` 额外加了 `@ResponseBody`，直接写 JSON 不走视图。
+
+7. **Spring 常用钩子有哪些？核心是哪几个？**
+   <br/>→ Bean 级：`@PostConstruct`/`@PreDestroy`（初始化/销毁）、`BeanPostProcessor`（所有 Bean 初始化前后，AOP 代理生成点）、Aware 系列（注入容器资源）；容器级：`BeanFactoryPostProcessor`（修改 BeanDefinition）、`ApplicationListener`/`@EventListener`（事件监听）、`SmartLifecycle`（启停顺序）。核心是 `@PostConstruct`/`@PreDestroy` 和 `BeanPostProcessor`。
