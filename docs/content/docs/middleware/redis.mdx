@@ -32,7 +32,7 @@ description: Redis 数据结构、持久化机制、高可用集群、内存管�
 - **数据结构**：STRING / HASH / LIST / SET / ZSET（跳表，排行榜）
 - **线程模型**：单线程执行命令（无锁竞争）+ IO 多路复用；6.0 多线程只做网络读写，命令执行仍单线程
 - **持久化**：RDB（快照，fork 子进程，灾难恢复友好）→ AOF（追加日志，三种同步策略，更安全）；生产 RDB + AOF 混合
-- **高可用与集群**：Sentinel（监控+自动故障转移，AP）→ Cluster（原生分片，CRC16%16384 槽，MOVED 重定向）
+- **高可用与集群**：Sentinel（监控+自动故障转移，AP）→ Cluster（原生分片，CRC16%16384 槽，MOVED/ASK 重定向，在线 slot 迁移扩容）
 - **Tair（阿里分布式 KV）**：控制面(ConfigServer)/数据面(DataServer)分离 + 一致性哈希 bucket + 可插拔存储引擎
 - **内存管理**：淘汰策略（noeviction→LRU→LFU，冷热区分）+ 过期键删除（定时随机 + 惰性 + maxmemory 扫描）
 - **分布式锁**：SET NX EX 原子加锁 + value 唯一标识 + Lua 判断删除 + 看门狗；主从丢锁，强一致用 ZK/etcd
@@ -179,6 +179,54 @@ flowchart LR
 
     N1 -.->|"MOVED 重定向"| Client
 ```
+
+Cluster 把数据按 **slot（哈希槽）** 分片到多个主节点，每个主节点只负责一部分 key，这是它能横向扩展的根本（对比哨兵模式的「全量副本不分区」）。
+
+#### slot 机制
+
+- **固定 16384 个 slot**（0~16383），`slot = CRC16(key) % 16384`，key 永远跟着自己的 slot 走
+- **slot 是分片的最小单位**，不可再拆；每个节点用一张 16384 位的 bitmap 记录「哪些 slot 归我」
+- **哈希标签 `{...}`**：`{user1000}a` 和 `{user1000}b` 只对花括号内 `user1000` 算 slot，落同一 slot，用于把「事务/Lua 要操作的一组关联 key」强制放一起
+- **所有 16384 个 slot 都被分配、无遗漏**时集群才 `cluster_state:ok`
+
+#### 扩容与 slot 迁移
+
+Cluster 扩容 = 在线迁移 slot。**slot 总数始终 16384 不变**，变的是「分给几个主节点、每个拿哪一段」。
+
+**扩容前后 slot 分配**（3 主 → 4 主）：
+
+| 阶段 | A | B | C | D |
+|------|---|---|---|---|
+| 扩容前 | 0~5460 | 5461~10922 | 10923~16383 | — |
+| 扩容后 | 0~4095 | 4096~8191 | 8192~12287 | 12288~16383 |
+
+本质是**旧主各自割让一段 slot 给新主**，重新平均分。选哪几个 slot 迁：均等抽取 + 优先迁 key 少/空的 slot（减少搬迁数据量）。
+
+**加主节点步骤**：
+
+1. 启动空节点 → `CLUSTER MEET <已有节点>` 加入集群（gossip 被发现）
+2. `redis-cli --cluster reshard`（或手动 `CLUSTER SETSLOT` + `MIGRATE`）迁移 slot
+3. 迁移完成，slot 归属经 gossip 广播，客户端更新路由表
+
+**单个 slot 迁移底层流程**（从源 A 迁到新节点 D）：
+
+1. 目标 D：`CLUSTER SETSLOT <slot> IMPORTING <A节点ID>`
+2. 源 A：`CLUSTER SETSLOT <slot> MIGRATING <D节点ID>`
+3. 源 A 逐个 `MIGRATE` key 到 D（**单 key 原子**，key 要么在 A 要么在 D，不会两头都有或都没有）
+4. 搬完后双方 `CLUSTER SETSLOT <slot> NODE <D节点ID>`，gossip 广播归属
+
+**迁移期间如何保持在线**：
+
+| 重定向 | 含义 | 客户端动作 |
+|--------|------|-----------|
+| `MOVED` | slot 归属**永久**变了 | 更新本地 slot 表 |
+| `ASK` | slot **迁移中**，这个 key 刚被搬走 | 仅本次临时去目标节点取，不改路由 |
+
+迁移中 slot 处于 MIGRATING/IMPORTING 状态，客户端请求某 key 时：key 还在源 → 正常响应；key 已搬走 → 源返回 `ASK`，客户端带 `ASKING` 去目标取。加上 `MIGRATE` 单 key 原子，**读写全程不中断**。
+
+**加从节点**：启动 → `CLUSTER MEET` → `CLUSTER REPLICATE <主节点ID>`，做一次全量同步 + 增量复制。只多一个只读副本，不分担写、不迁移 slot，几乎无感。
+
+**迁移注意事项**：分批迁移（观察延迟/带宽）· 低峰期迁移 · 先拆大 key（大 key 迁移会短暂阻塞单线程）· 关注内网带宽。
 
 ### Tair（阿里分布式 KV 集群）
 
@@ -470,3 +518,9 @@ flowchart LR
 
 9. **高并发场景下热点榜单的写入瓶颈如何解决？**
    <br/>→ 三个手段：（1）MQ 异步削峰，用户行为先入消息队列，批量消费后 Pipeline 写 Redis；（2）多级 ZSET 按时间分层（hour/day/week），避免单个 ZSET 过大；（3）ZREMRANGEBYRANK 定期裁剪保留前 N 条，控制内存。极端场景还可将热点 item 的计数拆到多个 slot 分散写入压力。
+
+10. **Redis Cluster 的 slot 是怎么划分分配的？扩容前后有什么变化？**
+    <br/>→ 固定 16384 个 slot，`slot = CRC16(key) % 16384`，key 永远跟着自己的 slot 走；`{...}` 哈希标签可把关联 key 强制放同一 slot。slot 是分片最小单位，扩容前由 N 个主节点平分，扩容后由 N+1 个主节点重新平分——旧主各自割让一段 slot（优先挑 key 少的）给新主，slot 总数不变。
+
+11. **Redis Cluster 扩容的底层过程是什么？迁移期间如何保证服务不中断？**
+    <br/>→ 扩容 = 在线迁移 slot：启动空节点 → CLUSTER MEET 加入集群 → 源节点 CLUSTER SETSLOT MIGRATING、目标节点 IMPORTING → 源节点逐个 MIGRATE key（单 key 原子）→ 双方 SETSLOT NODE 完成归属并 gossip 广播。迁移期间靠 ASK 临时重定向：key 还在源就正常响应，已搬走就返回 ASK 让客户端带 ASKING 去目标取，读写不中断。注意分批/低峰迁移、先拆大 key、控制带宽。
